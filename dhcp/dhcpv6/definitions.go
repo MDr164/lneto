@@ -22,6 +22,9 @@ const (
 	// OptionsOffset is the byte offset where DHCPv6 options begin in a client-server message.
 	// Layout: MsgType(1) + TransactionID(3).
 	OptionsOffset = 4
+	// RelayOptionsOffset is the byte offset where DHCPv6 relay options begin.
+	// Layout: MsgType(1) + HopCount(1) + LinkAddress(16) + PeerAddress(16).
+	RelayOptionsOffset = 34
 )
 
 // MsgType is the DHCPv6 message type (RFC 8415 §7.3).

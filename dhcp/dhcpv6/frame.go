@@ -82,3 +82,81 @@ func (frm Frame) ForEachOption(fn func(off int, code OptCode, data []byte) error
 
 // ValidateSize validates the structure of the options section without invoking a callback.
 func (frm Frame) ValidateSize() error { return frm.ForEachOption(nil) }
+
+// NewRelayFrame returns a RelayFrame backed by buf.
+// Returns an error if buf is shorter than [RelayOptionsOffset] bytes.
+func NewRelayFrame(buf []byte) (RelayFrame, error) {
+	if len(buf) < RelayOptionsOffset {
+		return RelayFrame{}, lneto.ErrTruncatedFrame
+	}
+	return RelayFrame{buf: buf}, nil
+}
+
+// RelayFrame encapsulates a DHCPv6 Relay-forward or Relay-reply message.
+type RelayFrame struct {
+	buf []byte
+}
+
+// MsgType returns the relay message type field.
+func (frm RelayFrame) MsgType() MsgType { return MsgType(frm.buf[0]) }
+
+// SetMsgType sets the relay message type field.
+func (frm RelayFrame) SetMsgType(t MsgType) { frm.buf[0] = byte(t) }
+
+// HopCount returns the relay hop count.
+func (frm RelayFrame) HopCount() uint8 { return frm.buf[1] }
+
+// SetHopCount sets the relay hop count.
+func (frm RelayFrame) SetHopCount(hops uint8) { frm.buf[1] = hops }
+
+// LinkAddr returns a pointer to the relay link-address field.
+func (frm RelayFrame) LinkAddr() *[16]byte { return (*[16]byte)(frm.buf[2:18]) }
+
+// PeerAddr returns a pointer to the relay peer-address field.
+func (frm RelayFrame) PeerAddr() *[16]byte { return (*[16]byte)(frm.buf[18:34]) }
+
+// Options returns the relay options section.
+func (frm RelayFrame) Options() []byte { return frm.buf[RelayOptionsOffset:] }
+
+// ForEachOption iterates over all DHCPv6 relay options.
+func (frm RelayFrame) ForEachOption(fn func(off int, code OptCode, data []byte) error) error {
+	buf := frm.buf
+	ptr := RelayOptionsOffset
+	for ptr+4 <= len(buf) {
+		code := OptCode(binary.BigEndian.Uint16(buf[ptr:]))
+		optlen := int(binary.BigEndian.Uint16(buf[ptr+2:]))
+		if ptr+4+optlen > len(buf) {
+			return lneto.ErrInvalidLengthField
+		}
+		if fn != nil {
+			err := fn(ptr, code, buf[ptr+4:ptr+4+optlen])
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+		}
+		ptr += 4 + optlen
+	}
+	if ptr != len(buf) {
+		return lneto.ErrTruncatedFrame
+	}
+	return nil
+}
+
+// RelayMessage returns the DHCPv6 message carried by the relay-message option.
+func (frm RelayFrame) RelayMessage() ([]byte, bool, error) {
+	var msg []byte
+	err := frm.ForEachOption(func(_ int, code OptCode, data []byte) error {
+		if code == OptRelayMsg {
+			msg = data
+			return io.EOF
+		}
+		return nil
+	})
+	return msg, msg != nil, err
+}
+
+// ValidateSize validates the structure of the relay options section.
+func (frm RelayFrame) ValidateSize() error { return frm.ForEachOption(nil) }
