@@ -19,6 +19,13 @@ type ScopedAddr struct {
 	Zone uint32
 }
 
+// SourceCandidate describes a candidate source address for RFC 6724 selection.
+type SourceCandidate struct {
+	Addr       [16]byte
+	Deprecated bool
+	Temporary  bool
+}
+
 // Scope identifies an IPv6 address scope from RFC 4007.
 type Scope uint8
 
@@ -80,6 +87,91 @@ func AppendFormatScopedAddr(dst []byte, addr ScopedAddr) []byte {
 		dst = strconv.AppendUint(dst, uint64(addr.Zone), 10)
 	}
 	return dst
+}
+
+// SelectSourceAddr returns the best source address candidate for dst using the
+// RFC 6724 source address selection rules that are meaningful without route or
+// interface state.
+func SelectSourceAddr(candidates []SourceCandidate, dst [16]byte) (idx int, ok bool) {
+	if len(candidates) == 0 {
+		return 0, false
+	}
+	best := 0
+	for i := 1; i < len(candidates); i++ {
+		if preferSource(candidates[i], candidates[best], dst) {
+			best = i
+		}
+	}
+	return best, true
+}
+
+func preferSource(a, b SourceCandidate, dst [16]byte) bool {
+	if a.Addr == dst && b.Addr != dst {
+		return true
+	}
+	if b.Addr == dst && a.Addr != dst {
+		return false
+	}
+	dstScope := AddrScope(dst)
+	aUsable := AddrScope(a.Addr) >= dstScope
+	bUsable := AddrScope(b.Addr) >= dstScope
+	if aUsable != bUsable {
+		return aUsable
+	}
+	if a.Deprecated != b.Deprecated {
+		return !a.Deprecated
+	}
+	dstLabel := addrLabel(dst)
+	aLabelMatch := addrLabel(a.Addr) == dstLabel
+	bLabelMatch := addrLabel(b.Addr) == dstLabel
+	if aLabelMatch != bLabelMatch {
+		return aLabelMatch
+	}
+	if a.Temporary != b.Temporary {
+		return !a.Temporary
+	}
+	return commonPrefixLen(a.Addr, dst) > commonPrefixLen(b.Addr, dst)
+}
+
+func addrLabel(addr [16]byte) uint8 {
+	switch {
+	case addr == ([16]byte{15: 1}):
+		return 0
+	case addr[0] == 0xfc || addr[0] == 0xfd:
+		return 13
+	case addr[0] == 0x20 && addr[1] == 0x02:
+		return 2
+	case addr[0] == 0x20 && addr[1] == 0x01 && addr[2] == 0 && addr[3] == 0:
+		return 5
+	case isIPv4Mapped(addr):
+		return 4
+	default:
+		return 1
+	}
+}
+
+func isIPv4Mapped(addr [16]byte) bool {
+	return addr[0] == 0 && addr[1] == 0 && addr[2] == 0 && addr[3] == 0 &&
+		addr[4] == 0 && addr[5] == 0 && addr[6] == 0 && addr[7] == 0 &&
+		addr[8] == 0 && addr[9] == 0 && addr[10] == 0xff && addr[11] == 0xff
+}
+
+func commonPrefixLen(a, b [16]byte) int {
+	bits := 0
+	for i := range a {
+		x := a[i] ^ b[i]
+		if x == 0 {
+			bits += 8
+			continue
+		}
+		for mask := byte(0x80); mask != 0; mask >>= 1 {
+			if x&mask != 0 {
+				return bits
+			}
+			bits++
+		}
+	}
+	return bits
 }
 
 // SLAACAddrFromMAC returns the stable IPv6 SLAAC address for prefix and mac.

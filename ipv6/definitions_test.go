@@ -68,6 +68,79 @@ func TestAppendFormatScopedAddrNoAllocs(t *testing.T) {
 	}
 }
 
+func TestSelectSourceAddr(t *testing.T) {
+	dst := netip.MustParseAddr("2001:db8:1::99").As16()
+	candidates := []SourceCandidate{
+		{Addr: netip.MustParseAddr("2001:db8:2::1").As16()},
+		{Addr: netip.MustParseAddr("2001:db8:1::1").As16()},
+	}
+	idx, ok := SelectSourceAddr(candidates, dst)
+	if !ok || idx != 1 {
+		t.Fatalf("SelectSourceAddr longest prefix = %d, %v, want 1, true", idx, ok)
+	}
+}
+
+func TestSelectSourceAddrRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		dst        string
+		candidates []SourceCandidate
+		want       int
+	}{
+		{
+			name: "same address",
+			dst:  "2001:db8::1",
+			candidates: []SourceCandidate{
+				{Addr: netip.MustParseAddr("2001:db8::2").As16()},
+				{Addr: netip.MustParseAddr("2001:db8::1").As16()},
+			},
+			want: 1,
+		},
+		{
+			name: "avoid deprecated",
+			dst:  "2001:db8::99",
+			candidates: []SourceCandidate{
+				{Addr: netip.MustParseAddr("2001:db8::1").As16(), Deprecated: true},
+				{Addr: netip.MustParseAddr("2001:db8::2").As16()},
+			},
+			want: 1,
+		},
+		{
+			name: "scope",
+			dst:  "2001:db8::99",
+			candidates: []SourceCandidate{
+				{Addr: netip.MustParseAddr("fe80::1").As16()},
+				{Addr: netip.MustParseAddr("2001:db8::1").As16()},
+			},
+			want: 1,
+		},
+		{
+			name: "label",
+			dst:  "fd00::99",
+			candidates: []SourceCandidate{
+				{Addr: netip.MustParseAddr("2001:db8::1").As16()},
+				{Addr: netip.MustParseAddr("fd00::1").As16()},
+			},
+			want: 1,
+		},
+		{
+			name: "avoid temporary",
+			dst:  "2001:db8::99",
+			candidates: []SourceCandidate{
+				{Addr: netip.MustParseAddr("2001:db8::1").As16(), Temporary: true},
+				{Addr: netip.MustParseAddr("2001:db8::2").As16()},
+			},
+			want: 1,
+		},
+	}
+	for _, tc := range tests {
+		idx, ok := SelectSourceAddr(tc.candidates, netip.MustParseAddr(tc.dst).As16())
+		if !ok || idx != tc.want {
+			t.Errorf("%s: SelectSourceAddr = %d, %v, want %d, true", tc.name, idx, ok, tc.want)
+		}
+	}
+}
+
 func TestSLAACAddrFromMAC(t *testing.T) {
 	addr, ok := SLAACAddrFromMAC(netip.MustParsePrefix("2001:db8:1:2::/64"), [6]byte{0x00, 0x25, 0x96, 0x12, 0x34, 0x56})
 	if !ok {
