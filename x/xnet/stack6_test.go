@@ -351,6 +351,52 @@ func TestStackAsyncApplyRouterAdvertisementRDNSS(t *testing.T) {
 	}
 }
 
+func TestStack6IngressRouterAdvertisementSLAAC(t *testing.T) {
+	cfg := StackConfig{
+		Hostname:        "passive-ra-1",
+		RandSeed:        1,
+		HardwareAddress: [6]byte{0x00, 0x25, 0x96, 0x12, 0x34, 0x56},
+		ICMPQueueLimit:  1,
+	}
+	s := DefaultStack6()
+	if err := s.Reset6(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnableICMP6(true); err != nil {
+		t.Fatal(err)
+	}
+	prefixOpt := makeRouterAdvertisementPrefixOption(netip.MustParsePrefix("2001:db8:1:2::/64"), 3600, 1800, true)
+	buf := make([]byte, ipv6HeaderSize+16+len(prefixOpt))
+	ifrm, err := ipv6.NewFrame(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ifrm.SetVersionTrafficAndFlow(6, 0, 0)
+	ifrm.SetPayloadLength(uint16(len(buf) - ipv6HeaderSize))
+	ifrm.SetNextHeader(lneto.IPProtoIPv6ICMP)
+	ifrm.SetHopLimit(255)
+	*ifrm.SourceAddr() = netip.MustParseAddr("fe80::1").As16()
+	*ifrm.DestinationAddr() = netip.MustParseAddr("ff02::1").As16()
+	icmp, err := icmpv6.NewFrame(buf[ipv6HeaderSize:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	icmp.SetType(icmpv6.TypeRouterAdvertisement)
+	copy(buf[ipv6HeaderSize+16:], prefixOpt[:])
+	icmp.SetCRC(0)
+	var crc lneto.CRC791
+	ifrm.CRCWritePseudo(&crc)
+	icmp.SetCRC(crc.PayloadSum16(buf[ipv6HeaderSize:]))
+
+	if err := s.IngressIPv6(buf); err != nil {
+		t.Fatal(err)
+	}
+	want := netip.MustParseAddr("2001:db8:1:2:225:96ff:fe12:3456")
+	if got := netip.AddrFrom16(s.Addr6()); got != want {
+		t.Fatalf("Addr6 = %s, want %s", got, want)
+	}
+}
+
 func makeRouterAdvertisementPrefixOption(prefix netip.Prefix, valid, preferred uint32, autonomous bool) [32]byte {
 	var buf [32]byte
 	buf[0] = icmpv6.OptPrefixInformation

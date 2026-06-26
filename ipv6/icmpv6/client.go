@@ -64,6 +64,7 @@ type Client struct {
 	// NDP address resolution fields.
 	ndpCache  ndpCache
 	onresolve func(mac [6]byte, addr [16]byte)
+	onRA      func(options []byte) error
 	ourMAC    [6]byte
 	ourIP     [16]byte
 
@@ -152,6 +153,9 @@ func (client *Client) Demux(carrierData []byte, frameOffset int) error {
 			copy(client.routerAd.Source[:], carrierData[8:24])
 		}
 		client.routerAdOK = true
+		if client.onRA != nil {
+			return client.onRA(ra.Options())
+		}
 		return nil
 	case TypePacketTooBig:
 		frm := FramePacketTooBig{Frame: ifrm}
@@ -206,6 +210,12 @@ func (client *Client) Encapsulate(carrierData []byte, ipOffset, frameOffset int)
 
 func (client *Client) SetNDPResolveCallback(cb func(mac [6]byte, addr [16]byte)) {
 	client.onresolve = cb
+}
+
+// SetRouterAdvertisementCallback sets the callback called for received Router
+// Advertisement options. The options slice is only valid during the callback.
+func (client *Client) SetRouterAdvertisementCallback(cb func(options []byte) error) {
+	client.onRA = cb
 }
 
 func (client *Client) NDPStartQuery(addr [16]byte, triggerCallback bool) error {

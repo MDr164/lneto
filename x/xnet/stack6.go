@@ -132,6 +132,7 @@ func (s *stack6) Reset6(cfg *StackConfig) error {
 			return err
 		}
 		s.icmp6.SetNDPResolveCallback(s.macResolve)
+		s.icmp6.SetRouterAdvertisementCallback(s.applyRouterAdvertisement6)
 		ndpSlots := int(cfg.MaxActiveTCPPorts) + int(cfg.MaxActiveUDPPorts)
 		internal.SliceReuse(&s.ndpPending, ndpSlots)
 		s.ndpPending = s.ndpPending[:cap(s.ndpPending)] // all slots available for scan
@@ -193,6 +194,11 @@ func (s *stack6) ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok 
 		return s.SetAddr6(addr.As16())
 	})
 	return addr, ok, err
+}
+
+func (s *stack6) applyRouterAdvertisement6(options []byte) error {
+	_, _, err := s.ApplyRouterAdvertisement6(options)
+	return err
 }
 
 func (s *stack6) StartDHCPv6Request() error {
