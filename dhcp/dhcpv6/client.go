@@ -39,6 +39,9 @@ type Client struct {
 	// dns accumulates DNS recursive name server addresses (OptDNSServers).
 	// Client owns the backing array; cleared on reset, capacity reused.
 	dns []netip.Addr
+	// ntps accumulates NTP server addresses (OptNTPServer, suboption 1).
+	// Client owns the backing array; cleared on reset, capacity reused.
+	ntps []netip.Addr
 
 	assignedAddr      [16]byte
 	assignedAddrValid bool
@@ -90,6 +93,7 @@ func (c *Client) reset() {
 		duid:       c.duid,
 		serverDUID: c.serverDUID[:0],
 		dns:        c.dns[:0],
+		ntps:       c.ntps[:0],
 	}
 }
 
@@ -231,9 +235,28 @@ func (c *Client) setOptions(frm Frame) error {
 			for i := 0; i+16 <= len(data); i += 16 {
 				c.dns = append(c.dns, netip.AddrFrom16([16]byte(data[i:i+16])))
 			}
+		case OptNTPServer:
+			c.parseNTPServer(data)
 		}
 		return nil
 	})
+}
+
+func (c *Client) parseNTPServer(data []byte) {
+	if len(c.ntps) > 0 {
+		return
+	}
+	for ptr := 0; ptr+4 <= len(data); {
+		subCode := binary.BigEndian.Uint16(data[ptr:])
+		subLen := int(binary.BigEndian.Uint16(data[ptr+2:]))
+		if ptr+4+subLen > len(data) {
+			break
+		}
+		if subCode == 1 && subLen == 16 {
+			c.ntps = append(c.ntps, netip.AddrFrom16([16]byte(data[ptr+4:ptr+20])))
+		}
+		ptr += 4 + subLen
+	}
 }
 
 // parseIANA processes the payload of an OptIANA option, extracting the
@@ -296,6 +319,12 @@ func (c *Client) AppendDNSServers(dst []netip.Addr) []netip.Addr { return append
 
 // NumDNSServers returns the number of DNS server addresses received.
 func (c *Client) NumDNSServers() int { return len(c.dns) }
+
+// AppendNTPServers appends the NTP server addresses received from the server to dst.
+func (c *Client) AppendNTPServers(dst []netip.Addr) []netip.Addr { return append(dst, c.ntps...) }
+
+// NumNTPServers returns the number of NTP server addresses received.
+func (c *Client) NumNTPServers() int { return len(c.ntps) }
 
 // ConnectionID returns a pointer to the client's connection ID.
 // The value increments on each reset; callers should discard registrations when it changes.

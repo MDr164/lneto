@@ -2,6 +2,7 @@ package dhcpv6
 
 import (
 	"encoding/binary"
+	"net/netip"
 	"testing"
 )
 
@@ -162,6 +163,54 @@ func TestClientSolicitRequest(t *testing.T) {
 	if addr != assignedAddr {
 		t.Errorf("AssignedAddr: got %v, want %v", addr, assignedAddr)
 	}
+}
+
+func TestClientParsesNTPServerOption(t *testing.T) {
+	const xid = 0x102030
+	clientMAC := [6]byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	serverDUID := []byte{0, 3, 0, 1, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	assignedAddr := [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	ntpAddr := [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x7b}
+	iaid := [4]byte{clientMAC[0], clientMAC[1], clientMAC[2], clientMAC[3]}
+
+	var cl Client
+	if err := cl.BeginRequest(xid, RequestConfig{ClientHardwareAddr: clientMAC}); err != nil {
+		t.Fatal("BeginRequest:", err)
+	}
+	var buf [1024]byte
+	if _, err := cl.Encapsulate(buf[:], -1, 0); err != nil {
+		t.Fatal("Encapsulate (Solicit):", err)
+	}
+	advFrame := buildServerFrame(MsgAdvertise, xid, serverDUID, iaid, assignedAddr)
+	if err := cl.Demux(advFrame, 0); err != nil {
+		t.Fatal("Demux (Advertise):", err)
+	}
+	if _, err := cl.Encapsulate(buf[:], -1, 0); err != nil {
+		t.Fatal("Encapsulate (Request):", err)
+	}
+
+	replyFrame := appendNTPServerOption(buildServerFrame(MsgReply, xid, serverDUID, iaid, assignedAddr), ntpAddr)
+	if err := cl.Demux(replyFrame, 0); err != nil {
+		t.Fatal("Demux (Reply):", err)
+	}
+	var ntps []netip.Addr
+	ntps = cl.AppendNTPServers(ntps)
+	if len(ntps) != 1 || ntps[0] != netip.AddrFrom16(ntpAddr) {
+		t.Fatalf("AppendNTPServers = %v, want %v", ntps, netip.AddrFrom16(ntpAddr))
+	}
+	if n := cl.NumNTPServers(); n != 1 {
+		t.Fatalf("NumNTPServers = %d, want 1", n)
+	}
+}
+
+func appendNTPServerOption(frame []byte, addr [16]byte) []byte {
+	var ntpPayload [20]byte
+	binary.BigEndian.PutUint16(ntpPayload[0:2], 1)
+	binary.BigEndian.PutUint16(ntpPayload[2:4], 16)
+	copy(ntpPayload[4:], addr[:])
+	buf := append(frame[:len(frame):len(frame)], make([]byte, 4+len(ntpPayload))...)
+	writeOpt6(buf[len(frame):], OptNTPServer, ntpPayload[:]...)
+	return buf
 }
 
 // TestClientEncapsulateSolicit verifies that the first Encapsulate call

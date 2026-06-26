@@ -122,6 +122,7 @@ type dhcpv6ServerTestNode struct {
 	requestSeen  bool
 	assignedAddr [16]byte
 	dnsServer    [16]byte
+	ntpServer    [16]byte
 	clientIAID   [4]byte
 }
 
@@ -133,7 +134,7 @@ func (sv *dhcpv6ServerTestNode) Encapsulate(carrierData []byte, _, offsetToFrame
 	if sv.requestSeen {
 		msg = dhcpv6.MsgReply
 	}
-	n := appendDHCPv6ServerFrame(carrierData[offsetToFrame:], msg, sv.xid, sv.clientIAID, sv.assignedAddr, sv.dnsServer)
+	n := appendDHCPv6ServerFrame(carrierData[offsetToFrame:], msg, sv.xid, sv.clientIAID, sv.assignedAddr, sv.dnsServer, sv.ntpServer)
 	if sv.requestSeen {
 		sv.xid = 0
 	}
@@ -164,7 +165,7 @@ func (sv *dhcpv6ServerTestNode) ConnectionID() *uint64 {
 	return &sv.connID
 }
 
-func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4]byte, assigned, dns [16]byte) int {
+func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4]byte, assigned, dns, ntp [16]byte) int {
 	dst[0] = byte(msg)
 	dst[1] = byte(xid >> 16)
 	dst[2] = byte(xid >> 8)
@@ -184,6 +185,13 @@ func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4
 	copy(iana[12:], iaaddr[:])
 	n += writeDHCPv6Opt(dst[n:], dhcpv6.OptIANA, iana[:])
 	n += writeDHCPv6Opt(dst[n:], dhcpv6.OptDNSServers, dns[:])
+	if ntp != ([16]byte{}) {
+		var ntpPayload [20]byte
+		binary.BigEndian.PutUint16(ntpPayload[0:2], 1)
+		binary.BigEndian.PutUint16(ntpPayload[2:4], 16)
+		copy(ntpPayload[4:], ntp[:])
+		n += writeDHCPv6Opt(dst[n:], dhcpv6.OptNTPServer, ntpPayload[:])
+	}
 	return n
 }
 
@@ -358,7 +366,8 @@ func TestStack6DHCPv6Request(t *testing.T) {
 	client, server := newStack6Pair(t, rngseed, 0, 0)
 	assigned := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10}
 	dns := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 53}
-	sv := &dhcpv6ServerTestNode{assignedAddr: assigned, dnsServer: dns}
+	ntp := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 123}
+	sv := &dhcpv6ServerTestNode{assignedAddr: assigned, dnsServer: dns, ntpServer: ntp}
 	var svUDP internet.StackUDPPort
 	svUDP.SetStackNode(sv, nil, dhcpv6.ClientPort)
 	if err := server.(*stack6).udps6.RegisterMACFiltered(&svUDP, nil); err != nil {
@@ -389,6 +398,9 @@ func TestStack6DHCPv6Request(t *testing.T) {
 	}
 	if len(got.DNSServers) != 1 || got.DNSServers[0] != netip.AddrFrom16(dns) {
 		t.Errorf("DNSServers = %v, want %v", got.DNSServers, netip.AddrFrom16(dns))
+	}
+	if len(got.NTPServers) != 1 || got.NTPServers[0] != netip.AddrFrom16(ntp) {
+		t.Errorf("NTPServers = %v, want %v", got.NTPServers, netip.AddrFrom16(ntp))
 	}
 }
 
