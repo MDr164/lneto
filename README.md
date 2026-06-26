@@ -111,7 +111,7 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | IPv6 Addressing Architecture | RFC 4291 | 🟡 | `ipv6`, `x/xnet` | — | Basic 128-bit address handling; no address selection policy |
 | IPv6 Scoped Address Architecture | RFC 4007 | ❌ | — | — | Not implemented |
 | ICMPv6 | RFC 4443 | ✅ | `ipv6/icmpv6` | — | Echo+NDP frame parsing and stack handling |
-| IPv6 Neighbor Discovery | RFC 4861 | 🟡 | `ipv6/icmpv6`, `x/xnet` | — | Neighbor solicitation/advertisement cache; router discovery incomplete |
+| IPv6 Neighbor Discovery | RFC 4861 | 🟡 | `ipv6/icmpv6`, `x/xnet` | — | Neighbor solicitation/advertisement cache and RA prefix option parsing; router state incomplete |
 | IPv6 SLAAC | RFC 4862 | ❌ | — | — | Not implemented |
 | IPv6 Default Address Selection | RFC 6724 | ❌ | — | — | Not implemented |
 | IPv6 Extension Header Processing | RFC 8200, RFC 7045, RFC 7112 | 🟡 | `ipv6`, `internet` | — | Extension header chain parsing and inbound demux; fragment reassembly not implemented |

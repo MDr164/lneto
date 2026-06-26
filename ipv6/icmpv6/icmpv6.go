@@ -19,9 +19,19 @@ const (
 )
 
 const (
+	OptPrefixInformation  = 3  // RFC 4861 §4.6.2
 	OptRecursiveDNSServer = 25 // RFC 8106 §5.1
 	OptDNSSearchList      = 31 // RFC 8106 §5.2
 )
+
+// PrefixInformation describes an RFC 4861 Prefix Information option.
+type PrefixInformation struct {
+	Prefix            netip.Prefix
+	OnLink            bool
+	Autonomous        bool
+	ValidLifetime     uint32
+	PreferredLifetime uint32
+}
 
 type Type uint8
 
@@ -185,6 +195,26 @@ func ForEachOption(options []byte, fn func(option []byte) error) error {
 		return lneto.ErrTruncatedFrame
 	}
 	return nil
+}
+
+// ParsePrefixInformationOption parses an RFC 4861 Prefix Information option.
+func ParsePrefixInformationOption(option []byte) (info PrefixInformation, ok bool) {
+	if len(option) < 32 || option[0] != OptPrefixInformation || option[1] != 4 {
+		return PrefixInformation{}, false
+	}
+	bits := int(option[2])
+	flags := option[3]
+	prefix := netip.PrefixFrom(netip.AddrFrom16([16]byte(option[16:32])), bits)
+	if !prefix.IsValid() {
+		return PrefixInformation{}, false
+	}
+	return PrefixInformation{
+		Prefix:            prefix.Masked(),
+		OnLink:            flags&0x80 != 0,
+		Autonomous:        flags&0x40 != 0,
+		ValidLifetime:     binary.BigEndian.Uint32(option[4:8]),
+		PreferredLifetime: binary.BigEndian.Uint32(option[8:12]),
+	}, true
 }
 
 // ParseRDNSSOption appends recursive DNS server addresses from an RFC 8106

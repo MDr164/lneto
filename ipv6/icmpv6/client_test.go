@@ -62,24 +62,31 @@ func TestRouterAdvertisementDNSOptions(t *testing.T) {
 	dnsslLifetime := uint32(900)
 	dns1 := netip.MustParseAddr("2001:db8::53")
 	dns2 := netip.MustParseAddr("2001:db8::54")
+	prefix := netip.MustParsePrefix("2001:db8:abcd::/48")
+	prefixOpt := makePrefixInformationOption(prefix, 3600, 1800, true, true)
 	rdnss := makeRDNSSOption(rdnssLifetime, dns1, dns2)
 	dnssl := makeDNSSLOption(t, dnsslLifetime, "example.com", "corp.example.com")
 
-	buf := make([]byte, sizeRouterAd+len(rdnss)+len(dnssl))
+	buf := make([]byte, sizeRouterAd+len(prefixOpt)+len(rdnss)+len(dnssl))
 	frm, err := NewFrame(buf)
 	if err != nil {
 		t.Fatal(err)
 	}
 	frm.SetType(TypeRouterAdvertisement)
-	copy(buf[sizeRouterAd:], rdnss)
-	copy(buf[sizeRouterAd+len(rdnss):], dnssl)
+	copy(buf[sizeRouterAd:], prefixOpt)
+	copy(buf[sizeRouterAd+len(prefixOpt):], rdnss)
+	copy(buf[sizeRouterAd+len(prefixOpt)+len(rdnss):], dnssl)
 	ra := FrameRouterAdvertisement{Frame: frm}
 
+	var gotPrefix PrefixInformation
+	var gotPrefixOK bool
 	var gotDNS []netip.Addr
 	var gotDomains []dns.Name
 	var gotRDNSSLifetime, gotDNSSLLifetime uint32
 	err = ForEachOption(ra.Options(), func(option []byte) error {
 		switch option[0] {
+		case OptPrefixInformation:
+			gotPrefix, gotPrefixOK = ParsePrefixInformationOption(option)
 		case OptRecursiveDNSServer:
 			var ok bool
 			gotRDNSSLifetime, gotDNS, ok = ParseRDNSSOption(gotDNS, option)
@@ -98,6 +105,9 @@ func TestRouterAdvertisementDNSOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !gotPrefixOK || gotPrefix.Prefix != prefix || !gotPrefix.OnLink || !gotPrefix.Autonomous || gotPrefix.ValidLifetime != 3600 || gotPrefix.PreferredLifetime != 1800 {
+		t.Fatalf("PrefixInformation = %+v ok=%v", gotPrefix, gotPrefixOK)
+	}
 	if gotRDNSSLifetime != rdnssLifetime || len(gotDNS) != 2 || gotDNS[0] != dns1 || gotDNS[1] != dns2 {
 		t.Fatalf("RDNSS lifetime=%d servers=%v", gotRDNSSLifetime, gotDNS)
 	}
@@ -107,6 +117,24 @@ func TestRouterAdvertisementDNSOptions(t *testing.T) {
 	if !gotDomains[0].EqualString("example.com") || !gotDomains[1].EqualString("corp.example.com") {
 		t.Fatalf("DNSSL domains=%q %q", gotDomains[0].String(), gotDomains[1].String())
 	}
+}
+
+func makePrefixInformationOption(prefix netip.Prefix, valid, preferred uint32, onLink, autonomous bool) []byte {
+	var buf [32]byte
+	buf[0] = OptPrefixInformation
+	buf[1] = 4
+	buf[2] = byte(prefix.Bits())
+	if onLink {
+		buf[3] |= 0x80
+	}
+	if autonomous {
+		buf[3] |= 0x40
+	}
+	binary.BigEndian.PutUint32(buf[4:8], valid)
+	binary.BigEndian.PutUint32(buf[8:12], preferred)
+	addr := prefix.Addr().As16()
+	copy(buf[16:], addr[:])
+	return buf[:]
 }
 
 func makeRDNSSOption(lifetime uint32, addrs ...netip.Addr) []byte {
