@@ -1,8 +1,11 @@
 package icmpv6
 
 import (
+	"encoding/binary"
+	"net/netip"
 	"testing"
 
+	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/internal"
 )
 
@@ -52,6 +55,92 @@ func TestClients(t *testing.T) {
 	} else if n > 0 {
 		t.Error("responder: expected no more data to be sent")
 	}
+}
+
+func TestRouterAdvertisementDNSOptions(t *testing.T) {
+	rdnssLifetime := uint32(1200)
+	dnsslLifetime := uint32(900)
+	dns1 := netip.MustParseAddr("2001:db8::53")
+	dns2 := netip.MustParseAddr("2001:db8::54")
+	rdnss := makeRDNSSOption(rdnssLifetime, dns1, dns2)
+	dnssl := makeDNSSLOption(t, dnsslLifetime, "example.com", "corp.example.com")
+
+	buf := make([]byte, sizeRouterAd+len(rdnss)+len(dnssl))
+	frm, err := NewFrame(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frm.SetType(TypeRouterAdvertisement)
+	copy(buf[sizeRouterAd:], rdnss)
+	copy(buf[sizeRouterAd+len(rdnss):], dnssl)
+	ra := FrameRouterAdvertisement{Frame: frm}
+
+	var gotDNS []netip.Addr
+	var gotDomains []dns.Name
+	var gotRDNSSLifetime, gotDNSSLLifetime uint32
+	err = ForEachOption(ra.Options(), func(option []byte) error {
+		switch option[0] {
+		case OptRecursiveDNSServer:
+			var ok bool
+			gotRDNSSLifetime, gotDNS, ok = ParseRDNSSOption(gotDNS, option)
+			if !ok {
+				t.Fatal("ParseRDNSSOption failed")
+			}
+		case OptDNSSearchList:
+			var ok bool
+			gotDNSSLLifetime, gotDomains, ok = ParseDNSSLOption(gotDomains, option)
+			if !ok {
+				t.Fatal("ParseDNSSLOption failed")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRDNSSLifetime != rdnssLifetime || len(gotDNS) != 2 || gotDNS[0] != dns1 || gotDNS[1] != dns2 {
+		t.Fatalf("RDNSS lifetime=%d servers=%v", gotRDNSSLifetime, gotDNS)
+	}
+	if gotDNSSLLifetime != dnsslLifetime || len(gotDomains) != 2 {
+		t.Fatalf("DNSSL lifetime=%d domains=%v", gotDNSSLLifetime, gotDomains)
+	}
+	if !gotDomains[0].EqualString("example.com") || !gotDomains[1].EqualString("corp.example.com") {
+		t.Fatalf("DNSSL domains=%q %q", gotDomains[0].String(), gotDomains[1].String())
+	}
+}
+
+func makeRDNSSOption(lifetime uint32, addrs ...netip.Addr) []byte {
+	optLen := 8 + 16*len(addrs)
+	buf := make([]byte, optLen)
+	buf[0] = OptRecursiveDNSServer
+	buf[1] = byte(optLen / 8)
+	binary.BigEndian.PutUint32(buf[4:8], lifetime)
+	for i, addr := range addrs {
+		a := addr.As16()
+		copy(buf[8+16*i:], a[:])
+	}
+	return buf
+}
+
+func makeDNSSLOption(t testing.TB, lifetime uint32, domains ...string) []byte {
+	t.Helper()
+	buf := []byte{OptDNSSearchList, 0, 0, 0, 0, 0, 0, 0}
+	binary.BigEndian.PutUint32(buf[4:8], lifetime)
+	for _, domain := range domains {
+		name, err := dns.NewName(domain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf, err = name.AppendTo(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for len(buf)%8 != 0 {
+		buf = append(buf, 0)
+	}
+	buf[1] = byte(len(buf) / 8)
+	return buf
 }
 
 func testSingleExchange(t *testing.T, sender, responder *Client, buf []byte, pattern []byte, size uint16) (senderKey uint32) {

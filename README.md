@@ -116,7 +116,7 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | IPv6 Default Address Selection | RFC 6724 | ❌ | — | — | Not implemented |
 | IPv6 Extension Header Processing | RFC 8200, RFC 7045, RFC 7112 | ❌ | — | — | Not implemented |
 | IPv6 Path MTU Discovery | RFC 8201 | ❌ | — | — | Not implemented |
-| IPv6 Router Advertisement DNS Options | RFC 8106 | ❌ | — | — | Not implemented |
+| IPv6 Router Advertisement DNS Options | RFC 8106 | 🟡 | `ipv6/icmpv6` | — | RDNSS and DNSSL option parsing; no router/SLAAC state integration |
 | IPv6 Privacy Extensions | RFC 8981 | ❌ | — | — | Not implemented |
 | MLDv2 | RFC 3810 | ❌ | — | — | Not implemented |
 | IPv6 Node Requirements | RFC 8504 | ❌ | — | — | Not implemented as a conformance checklist |

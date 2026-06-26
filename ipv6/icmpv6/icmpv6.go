@@ -2,17 +2,25 @@ package icmpv6
 
 import (
 	"encoding/binary"
+	"net/netip"
 
 	"github.com/soypat/lneto"
+	"github.com/soypat/lneto/dns"
 )
 
 //go:generate stringer -type=Type,CodeDestinationUnreachable,CodeParameterProblem -linecomment -output stringers.go
 
 const (
 	sizeHeader    = 8
+	sizeRouterAd  = 16
 	sizeNDPBase   = sizeHeader + 16 // 24: ICMPv6 header + 16-byte target address
 	sizeNDPOption = 8               // 1 type + 1 len + 6 MAC (Ethernet link-layer option, RFC 4861 §4.6.1)
 	sizeNDP       = sizeNDPBase + sizeNDPOption
+)
+
+const (
+	OptRecursiveDNSServer = 25 // RFC 8106 §5.1
+	OptDNSSearchList      = 31 // RFC 8106 §5.2
 )
 
 type Type uint8
@@ -140,6 +148,103 @@ func (frm FrameParameterProblem) SetPointer(ptr uint32) {
 
 type FrameEcho struct {
 	Frame
+}
+
+// FrameRouterAdvertisement accesses a Router Advertisement message (RFC 4861 §4.2).
+type FrameRouterAdvertisement struct {
+	Frame
+}
+
+// CurrentHopLimit returns the default hop limit advertised by the router.
+func (frm FrameRouterAdvertisement) CurrentHopLimit() uint8 { return frm.buf[4] }
+
+// RouterLifetime returns the router lifetime in seconds.
+func (frm FrameRouterAdvertisement) RouterLifetime() uint16 {
+	return binary.BigEndian.Uint16(frm.buf[6:8])
+}
+
+// Options returns the bytes following the fixed Router Advertisement header.
+func (frm FrameRouterAdvertisement) Options() []byte { return frm.buf[sizeRouterAd:] }
+
+// ForEachOption calls fn for each IPv6 ND option in options.
+func ForEachOption(options []byte, fn func(option []byte) error) error {
+	for len(options) >= 2 {
+		l := int(options[1]) * 8
+		if l == 0 {
+			return lneto.ErrInvalidLengthField
+		}
+		if l > len(options) {
+			return lneto.ErrTruncatedFrame
+		}
+		if err := fn(options[:l]); err != nil {
+			return err
+		}
+		options = options[l:]
+	}
+	if len(options) != 0 {
+		return lneto.ErrTruncatedFrame
+	}
+	return nil
+}
+
+// ParseRDNSSOption appends recursive DNS server addresses from an RFC 8106
+// Recursive DNS Server option to dst.
+func ParseRDNSSOption(dst []netip.Addr, option []byte) (lifetime uint32, servers []netip.Addr, ok bool) {
+	if len(option) < 24 || option[0] != OptRecursiveDNSServer {
+		return 0, dst, false
+	}
+	optLen := int(option[1]) * 8
+	if optLen < 24 || optLen > len(option) || (optLen-8)%16 != 0 {
+		return 0, dst, false
+	}
+	option = option[:optLen]
+	lifetime = binary.BigEndian.Uint32(option[4:8])
+	for i := 8; i+16 <= len(option); i += 16 {
+		dst = append(dst, netip.AddrFrom16([16]byte(option[i:i+16])))
+	}
+	return lifetime, dst, true
+}
+
+// ParseDNSSLOption appends DNS search list names from an RFC 8106 DNS Search
+// List option to dst.
+func ParseDNSSLOption(dst []dns.Name, option []byte) (lifetime uint32, names []dns.Name, ok bool) {
+	if len(option) < 16 || option[0] != OptDNSSearchList {
+		return 0, dst, false
+	}
+	optLen := int(option[1]) * 8
+	if optLen < 16 || optLen > len(option) {
+		return 0, dst, false
+	}
+	option = option[:optLen]
+	lifetime = binary.BigEndian.Uint32(option[4:8])
+	for off := uint16(8); off < uint16(len(option)); {
+		if allZero(option[off:]) {
+			break
+		}
+		idx := len(dst)
+		if idx < cap(dst) {
+			dst = dst[:idx+1]
+		} else {
+			dst = append(dst, dns.Name{})
+		}
+		next, err := dst[idx].Decode(option, off)
+		if err != nil || next <= off || next > uint16(len(option)) {
+			dst[idx].Reset()
+			dst = dst[:idx]
+			return 0, dst, false
+		}
+		off = next
+	}
+	return lifetime, dst, true
+}
+
+func allZero(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (frm FrameEcho) Identifier() uint16 {
