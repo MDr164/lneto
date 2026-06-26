@@ -76,6 +76,9 @@ func (c *Client) BeginRequest(xid uint32, cfg RequestConfig) error {
 	return nil
 }
 
+// Reset clears the DHCPv6 exchange state and invalidates stack registrations.
+func (c *Client) Reset() { c.reset() }
+
 // reset clears exchange state while preserving slice backing arrays and the
 // connection ID is incremented to invalidate any existing stack registrations.
 func (c *Client) reset() {
@@ -275,6 +278,18 @@ func (c *Client) State() ClientState { return c.state }
 
 // AssignedAddr returns the IPv6 address assigned by the server and whether it is valid.
 func (c *Client) AssignedAddr() ([16]byte, bool) { return c.assignedAddr, c.assignedAddrValid }
+
+// RebindingSeconds returns the IA_NA T2 timer from the server.
+func (c *Client) RebindingSeconds() uint32 { return c.t2 }
+
+// RenewalSeconds returns the IA_NA T1 timer from the server.
+func (c *Client) RenewalSeconds() uint32 { return c.t1 }
+
+// PreferredLifetimeSeconds returns the preferred lifetime of the assigned address.
+func (c *Client) PreferredLifetimeSeconds() uint32 { return c.preferredLifetime }
+
+// ValidLifetimeSeconds returns the valid lifetime of the assigned address.
+func (c *Client) ValidLifetimeSeconds() uint32 { return c.validLifetime }
 
 // AppendDNSServers appends the DNS server addresses received from the server to dst.
 func (c *Client) AppendDNSServers(dst []netip.Addr) []netip.Addr { return append(dst, c.dns...) }

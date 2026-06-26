@@ -1,9 +1,11 @@
 package xnet
 
 import (
+	"errors"
 	"net/netip"
 
 	"github.com/soypat/lneto"
+	"github.com/soypat/lneto/dhcp/dhcpv6"
 	"github.com/soypat/lneto/internal"
 	"github.com/soypat/lneto/internet"
 	"github.com/soypat/lneto/ipv6/icmpv6"
@@ -28,9 +30,21 @@ type Stack6 interface {
 	DialTCP6(conn *tcp.Conn, localPort uint16, raddr [16]byte, rport uint16, iss tcp.Value) error
 	RegisterListenerTCP6(listener *tcp.Listener) error
 	RegisterListenerUDP6(pktconn *udp.PacketConn) error
+	StartDHCPv6Request() error
+	ResultDHCPv6() (*DHCPResultsV6, error)
 	IngressIPv6(ipframe []byte) error
 	EgressIPv6(ipframe []byte) (int, error)
 	IPv6Stack() lneto.StackNode
+}
+
+// DHCPResultsV6 contains the result of a completed DHCPv6 address request.
+type DHCPResultsV6 struct {
+	DNSServers    []netip.Addr
+	AssignedAddr6 [16]byte
+	TRebind       uint32
+	TRenewal      uint32
+	TPreferred    uint32
+	TValid        uint32
 }
 
 type stack6 struct {
@@ -38,8 +52,13 @@ type stack6 struct {
 	udps6    internet.StackPortsMACFiltered
 	tcps6    internet.StackPortsMACFiltered
 	vld      lneto.Validator
+	rand     uint32
+	hwaddr   [6]byte
 	icmp6buf []byte
 	icmp6    icmpv6.Client
+	dhcpUDP6 internet.StackUDPPort
+	dhcp6    dhcpv6.Client
+	dhcp6res DHCPResultsV6
 	// ndpPending tracks in-flight NDP MAC resolves for outbound connections.
 	// macBuf is shared with the registered node so macResolve patches it in place.
 	ndpPending []struct {
@@ -66,6 +85,8 @@ func (s *stack6) Reset6(cfg *StackConfig) error {
 		return err
 	}
 	s.ip6.SetAddr6(cfg.StaticAddress6)
+	s.rand = uint32(cfg.RandSeed)
+	s.hwaddr = cfg.HardwareAddress
 	s.ip6.SetAcceptMulticast6(true) // IPv6 needs multicast to work.
 
 	s.tcps6.ResetTCP(cfg.MaxActiveTCPPorts)
@@ -75,12 +96,13 @@ func (s *stack6) Reset6(cfg *StackConfig) error {
 			return err
 		}
 	}
-	s.udps6.ResetUDP(cfg.MaxActiveUDPPorts)
-	if cfg.MaxActiveUDPPorts > 0 {
-		err = s.ip6.Register6(&s.udps6)
-		if err != nil {
-			return err
-		}
+	if cfg.MaxActiveUDPPorts == ^uint16(0) {
+		return lneto.ErrInvalidConfig
+	}
+	s.udps6.ResetUDP(1 + cfg.MaxActiveUDPPorts)
+	err = s.ip6.Register6(&s.udps6)
+	if err != nil {
+		return err
 	}
 
 	if cfg.ICMPQueueLimit > 0 {
@@ -131,6 +153,44 @@ func (s *stack6) RegisterListenerTCP6(listener *tcp.Listener) error {
 // receives inbound IPv6 datagrams. Mirrors StackAsync.RegisterListenerUDP for IPv4.
 func (s *stack6) RegisterListenerUDP6(pktconn *udp.PacketConn) error {
 	return s.udps6.RegisterMACFiltered(pktconn, nil)
+}
+
+func (s *stack6) StartDHCPv6Request() error {
+	s.dhcp6.Reset()
+	s.rand = internal.Prand32(s.rand)
+	xid := s.rand & 0xFFFFFF
+	if xid == 0 {
+		xid = 1
+	}
+	err := s.dhcp6.BeginRequest(xid, dhcpv6.RequestConfig{
+		ClientHardwareAddr: s.hwaddr,
+	})
+	if err != nil {
+		return err
+	}
+	mcast := [16]byte{0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0x02}
+	s.dhcpUDP6.SetStackNode(&s.dhcp6, mcast[:], dhcpv6.ServerPort)
+	return s.udps6.RegisterMACFiltered(&s.dhcpUDP6, nil)
+}
+
+func (s *stack6) ResultDHCPv6() (*DHCPResultsV6, error) {
+	if !s.dhcp6.State().HasIP() {
+		return nil, errors.New("DHCPv6 not completed")
+	}
+	assigned6, ok := s.dhcp6.AssignedAddr()
+	if !ok {
+		return nil, errors.New("no DHCPv6 assigned address")
+	}
+	s.dhcp6res = DHCPResultsV6{
+		AssignedAddr6: assigned6,
+		TRebind:       s.dhcp6.RebindingSeconds(),
+		TRenewal:      s.dhcp6.RenewalSeconds(),
+		TPreferred:    s.dhcp6.PreferredLifetimeSeconds(),
+		TValid:        s.dhcp6.ValidLifetimeSeconds(),
+		DNSServers:    s.dhcp6res.DNSServers[:0],
+	}
+	s.dhcp6res.DNSServers = s.dhcp6.AppendDNSServers(s.dhcp6res.DNSServers)
+	return &s.dhcp6res, nil
 }
 
 func (s *stack6) IngressIPv6(ipFrame []byte) error {

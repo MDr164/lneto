@@ -667,6 +667,16 @@ func (s *StackAsync) StartDHCPv4Request(request [4]byte) error {
 	return err
 }
 
+// StartDHCPv6Request starts a DHCPv6 IA_NA address request on the IPv6 stack.
+func (s *StackAsync) StartDHCPv6Request() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ipv6enabled {
+		return lneto.ErrUnsupported
+	}
+	return s.stack6.StartDHCPv6Request()
+}
+
 func (s *StackAsync) StartNTP(addr netip.Addr) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -756,6 +766,16 @@ func (s *StackAsync) ResultDHCP() (*DHCPResults, error) {
 		return nil, err
 	}
 	return &s.dhcpResults, nil
+}
+
+// ResultDHCPv6 returns the completed DHCPv6 request results.
+func (s *StackAsync) ResultDHCPv6() (*DHCPResultsV6, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ipv6enabled {
+		return nil, lneto.ErrUnsupported
+	}
+	return s.stack6.ResultDHCPv6()
 }
 
 type Statistics struct {

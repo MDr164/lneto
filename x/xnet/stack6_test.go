@@ -2,8 +2,13 @@ package xnet
 
 import (
 	"bytes"
+	"encoding/binary"
+	"net/netip"
 	"testing"
 
+	"github.com/soypat/lneto"
+	"github.com/soypat/lneto/dhcp/dhcpv6"
+	"github.com/soypat/lneto/internet"
 	"github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/udp"
 )
@@ -109,6 +114,84 @@ func exchangeIPv6Once(t testing.TB, src, dst Stack6, buf []byte) int {
 		t.Error("IngressIPv6:", err)
 	}
 	return n
+}
+
+type dhcpv6ServerTestNode struct {
+	connID       uint64
+	xid          uint32
+	requestSeen  bool
+	assignedAddr [16]byte
+	dnsServer    [16]byte
+	clientIAID   [4]byte
+}
+
+func (sv *dhcpv6ServerTestNode) Encapsulate(carrierData []byte, _, offsetToFrame int) (int, error) {
+	if sv.xid == 0 {
+		return 0, nil
+	}
+	msg := dhcpv6.MsgAdvertise
+	if sv.requestSeen {
+		msg = dhcpv6.MsgReply
+	}
+	n := appendDHCPv6ServerFrame(carrierData[offsetToFrame:], msg, sv.xid, sv.clientIAID, sv.assignedAddr, sv.dnsServer)
+	if sv.requestSeen {
+		sv.xid = 0
+	}
+	return n, nil
+}
+
+func (sv *dhcpv6ServerTestNode) Demux(carrierData []byte, frameOffset int) error {
+	frm, err := dhcpv6.NewFrame(carrierData[frameOffset:])
+	if err != nil {
+		return err
+	}
+	sv.xid = frm.TransactionID()
+	sv.requestSeen = frm.MsgType() == dhcpv6.MsgRequest
+	return frm.ForEachOption(func(_ int, code dhcpv6.OptCode, data []byte) error {
+		if code == dhcpv6.OptIANA && len(data) >= 4 {
+			sv.clientIAID = [4]byte(data[:4])
+		}
+		return nil
+	})
+}
+
+func (sv *dhcpv6ServerTestNode) LocalPort() uint16 { return dhcpv6.ServerPort }
+func (sv *dhcpv6ServerTestNode) Protocol() uint64  { return uint64(lneto.IPProtoUDP) }
+func (sv *dhcpv6ServerTestNode) ConnectionID() *uint64 {
+	if sv.connID == 0 {
+		sv.connID = 1
+	}
+	return &sv.connID
+}
+
+func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4]byte, assigned, dns [16]byte) int {
+	dst[0] = byte(msg)
+	dst[1] = byte(xid >> 16)
+	dst[2] = byte(xid >> 8)
+	dst[3] = byte(xid)
+	n := dhcpv6.OptionsOffset
+	n += writeDHCPv6Opt(dst[n:], dhcpv6.OptServerID, []byte{0, 3, 0, 1, 1, 2, 3, 4, 5, 6})
+	var iaaddr [28]byte
+	binary.BigEndian.PutUint16(iaaddr[:2], uint16(dhcpv6.OptIAAddr))
+	binary.BigEndian.PutUint16(iaaddr[2:4], 24)
+	copy(iaaddr[4:20], assigned[:])
+	binary.BigEndian.PutUint32(iaaddr[20:24], 1800)
+	binary.BigEndian.PutUint32(iaaddr[24:28], 3600)
+	var iana [40]byte
+	copy(iana[:4], iaid[:])
+	binary.BigEndian.PutUint32(iana[4:8], 900)
+	binary.BigEndian.PutUint32(iana[8:12], 1800)
+	copy(iana[12:], iaaddr[:])
+	n += writeDHCPv6Opt(dst[n:], dhcpv6.OptIANA, iana[:])
+	n += writeDHCPv6Opt(dst[n:], dhcpv6.OptDNSServers, dns[:])
+	return n
+}
+
+func writeDHCPv6Opt(dst []byte, code dhcpv6.OptCode, data []byte) int {
+	binary.BigEndian.PutUint16(dst[:2], uint16(code))
+	binary.BigEndian.PutUint16(dst[2:4], uint16(len(data)))
+	copy(dst[4:], data)
+	return 4 + len(data)
 }
 
 // listenTCP6 opens a passive TCP connection and registers it with a stack6 directly,
@@ -267,6 +350,45 @@ func TestStack6UDP_BidirectionalExchange(t *testing.T) {
 	}
 	if !bytes.Equal(rbuf[:n], msgBtoA) {
 		t.Errorf("A received %q, want %q", rbuf[:n], msgBtoA)
+	}
+}
+
+func TestStack6DHCPv6Request(t *testing.T) {
+	const rngseed = 12345
+	client, server := newStack6Pair(t, rngseed, 0, 0)
+	assigned := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10}
+	dns := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 53}
+	sv := &dhcpv6ServerTestNode{assignedAddr: assigned, dnsServer: dns}
+	var svUDP internet.StackUDPPort
+	svUDP.SetStackNode(sv, nil, dhcpv6.ClientPort)
+	if err := server.(*stack6).udps6.RegisterMACFiltered(&svUDP, nil); err != nil {
+		t.Fatal("register DHCPv6 server:", err)
+	}
+
+	if err := client.StartDHCPv6Request(); err != nil {
+		t.Fatal("StartDHCPv6Request:", err)
+	}
+	buf := make([]byte, maxFrame6)
+	for i := range 4 {
+		if i%2 == 0 {
+			exchangeIPv6Once(t, client, server, buf)
+		} else {
+			exchangeIPv6Once(t, server, client, buf)
+		}
+	}
+
+	got, err := client.ResultDHCPv6()
+	if err != nil {
+		t.Fatal("ResultDHCPv6:", err)
+	}
+	if got.AssignedAddr6 != assigned {
+		t.Errorf("AssignedAddr6 = %v, want %v", got.AssignedAddr6, assigned)
+	}
+	if got.TRenewal != 900 || got.TRebind != 1800 || got.TPreferred != 1800 || got.TValid != 3600 {
+		t.Errorf("timers = renewal:%d rebind:%d preferred:%d valid:%d", got.TRenewal, got.TRebind, got.TPreferred, got.TValid)
+	}
+	if len(got.DNSServers) != 1 || got.DNSServers[0] != netip.AddrFrom16(dns) {
+		t.Errorf("DNSServers = %v, want %v", got.DNSServers, netip.AddrFrom16(dns))
 	}
 }
 

@@ -108,8 +108,16 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | HTTP/1.1 headers | RFC 9110, RFC 9112 | ✅ | `http/httpraw` | 2 ⁴ | Header parse/format; no field normalization |
 | Ethernet PHY/MDIO | IEEE 802.3 cl.22/45 | ✅ | `phy` | — | Bare-metal PHY management via MDIO |
 | IPv6 | RFC 8200 | ✅ | `ipv6` | — | Frame parsing and stack handling |
+| IPv6 Addressing Architecture | RFC 4291 | 🟡 | `ipv6`, `x/xnet` | — | Basic 128-bit address handling; no address selection policy |
 | ICMPv6 | RFC 4443 | ✅ | `ipv6/icmpv6` | — | Echo+NDP frame parsing and stack handling |
-| DHCPv6 | RFC 8415 | 🟡 | `dhcp/dhcpv6` | — | Frame parsing and standalone handling |
+| IPv6 Neighbor Discovery | RFC 4861 | 🟡 | `ipv6/icmpv6`, `x/xnet` | — | Neighbor solicitation/advertisement cache; router discovery incomplete |
+| IPv6 SLAAC | RFC 4862 | ❌ | — | — | Not implemented |
+| IPv6 Default Address Selection | RFC 6724 | ❌ | — | — | Not implemented |
+| IPv6 Path MTU Discovery | RFC 8201 | ❌ | — | — | Not implemented |
+| IPv6 Router Advertisement DNS Options | RFC 8106 | ❌ | — | — | Not implemented |
+| IPv6 Privacy Extensions | RFC 8981 | ❌ | — | — | Not implemented |
+| MLDv2 | RFC 3810 | ❌ | — | — | Not implemented |
+| DHCPv6 | RFC 8415 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | Client IA_NA address assignment; no IA_PD, relay, reconfigure, or server |
 | TLS 1.3 | RFC 8446 | ❌ | — | — | Not implemented |
 
 ¹ `BenchmarkARPExchange` — full ARP request/response exchange over Ethernet: **0 B/op, 0 allocs/op**
