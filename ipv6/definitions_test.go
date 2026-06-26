@@ -5,6 +5,37 @@ import (
 	"testing"
 )
 
+func TestSLAACAddrFromMAC(t *testing.T) {
+	addr, ok := SLAACAddrFromMAC(netip.MustParsePrefix("2001:db8:1:2::/64"), [6]byte{0x00, 0x25, 0x96, 0x12, 0x34, 0x56})
+	if !ok {
+		t.Fatal("SLAACAddrFromMAC returned ok=false")
+	}
+	want := netip.MustParseAddr("2001:db8:1:2:225:96ff:fe12:3456")
+	if addr != want {
+		t.Fatalf("SLAACAddrFromMAC = %s, want %s", addr, want)
+	}
+}
+
+func TestSLAACAddrFromMACInvalidPrefix(t *testing.T) {
+	if _, ok := SLAACAddrFromMAC(netip.MustParsePrefix("2001:db8::/48"), [6]byte{1, 2, 3, 4, 5, 6}); ok {
+		t.Fatal("SLAACAddrFromMAC /48 ok=true, want false")
+	}
+	if _, ok := SLAACAddrFromMAC(netip.MustParsePrefix("192.0.2.0/24"), [6]byte{1, 2, 3, 4, 5, 6}); ok {
+		t.Fatal("SLAACAddrFromMAC IPv4 ok=true, want false")
+	}
+}
+
+func TestSLAACAddrFromMACNoAllocs(t *testing.T) {
+	prefix := netip.MustParsePrefix("2001:db8:1:2::/64")
+	mac := [6]byte{0x00, 0x25, 0x96, 0x12, 0x34, 0x56}
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _ = SLAACAddrFromMAC(prefix, mac)
+	})
+	if allocs != 0 {
+		t.Errorf("expected 0 allocs, got %v", allocs)
+	}
+}
+
 func TestAppendFormatAddr(t *testing.T) {
 	tests := []struct {
 		addr [16]byte

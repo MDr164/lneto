@@ -1,12 +1,35 @@
 package ipv6
 
-import "github.com/soypat/lneto/ipv4"
+import (
+	"net/netip"
+
+	"github.com/soypat/lneto/ipv4"
+)
 
 const (
 	sizeHeader = 40
 )
 
 type ToS = ipv4.ToS
+
+// SLAACAddrFromMAC returns the stable IPv6 SLAAC address for prefix and mac.
+// The prefix must be an IPv6 /64. The interface identifier is derived using
+// the modified EUI-64 format from RFC 4862 Appendix A.
+func SLAACAddrFromMAC(prefix netip.Prefix, mac [6]byte) (netip.Addr, bool) {
+	if !prefix.IsValid() || !prefix.Addr().Is6() || prefix.Bits() != 64 {
+		return netip.Addr{}, false
+	}
+	addr := prefix.Masked().Addr().As16()
+	addr[8] = mac[0] ^ 0x02
+	addr[9] = mac[1]
+	addr[10] = mac[2]
+	addr[11] = 0xff
+	addr[12] = 0xfe
+	addr[13] = mac[3]
+	addr[14] = mac[4]
+	addr[15] = mac[5]
+	return netip.AddrFrom16(addr), true
+}
 
 // AppendFormatAddr appends the canonical text representation of an IPv6 address
 // to dst following RFC 5952 conventions (lowercase hex, :: compression for the
