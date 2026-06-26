@@ -46,6 +46,12 @@ type Client struct {
 	// ntps accumulates NTP server addresses (OptNTPServer, suboption 1).
 	// Client owns the backing array; cleared on reset, capacity reused.
 	ntps []netip.Addr
+	// ntpMulticast accumulates NTP multicast addresses (OptNTPServer, suboption 2).
+	// Client owns the backing array; cleared on reset, capacity reused.
+	ntpMulticast []netip.Addr
+	// ntpNames accumulates NTP server FQDNs (OptNTPServer, suboption 3).
+	// Client owns the backing array; cleared on reset, capacity reused.
+	ntpNames []dns.Name
 
 	assignedAddr      [16]byte
 	assignedAddrValid bool
@@ -99,6 +105,8 @@ func (c *Client) reset() {
 		dns:          c.dns[:0],
 		domainSearch: c.domainSearch[:0],
 		ntps:         c.ntps[:0],
+		ntpMulticast: c.ntpMulticast[:0],
+		ntpNames:     c.ntpNames[:0],
 	}
 }
 
@@ -250,7 +258,7 @@ func (c *Client) setOptions(frm Frame) error {
 }
 
 func (c *Client) parseNTPServer(data []byte) {
-	if len(c.ntps) > 0 {
+	if len(c.ntps) > 0 || len(c.ntpMulticast) > 0 || len(c.ntpNames) > 0 {
 		return
 	}
 	for ptr := 0; ptr+4 <= len(data); {
@@ -259,8 +267,30 @@ func (c *Client) parseNTPServer(data []byte) {
 		if ptr+4+subLen > len(data) {
 			break
 		}
-		if subCode == 1 && subLen == 16 {
+		subData := data[ptr+4 : ptr+4+subLen]
+		switch subCode {
+		case 1:
+			if subLen != 16 {
+				break
+			}
 			c.ntps = append(c.ntps, netip.AddrFrom16([16]byte(data[ptr+4:ptr+20])))
+		case 2:
+			if subLen != 16 {
+				break
+			}
+			c.ntpMulticast = append(c.ntpMulticast, netip.AddrFrom16([16]byte(data[ptr+4:ptr+20])))
+		case 3:
+			idx := len(c.ntpNames)
+			if idx < cap(c.ntpNames) {
+				c.ntpNames = c.ntpNames[:idx+1]
+			} else {
+				c.ntpNames = append(c.ntpNames, dns.Name{})
+			}
+			next, err := c.ntpNames[idx].Decode(subData, 0)
+			if err != nil || next != uint16(len(subData)) {
+				c.ntpNames[idx].Reset()
+				c.ntpNames = c.ntpNames[:idx]
+			}
 		}
 		ptr += 4 + subLen
 	}
@@ -359,6 +389,20 @@ func (c *Client) AppendNTPServers(dst []netip.Addr) []netip.Addr { return append
 
 // NumNTPServers returns the number of NTP server addresses received.
 func (c *Client) NumNTPServers() int { return len(c.ntps) }
+
+// AppendNTPMulticastServers appends NTP multicast addresses received from the server to dst.
+func (c *Client) AppendNTPMulticastServers(dst []netip.Addr) []netip.Addr {
+	return append(dst, c.ntpMulticast...)
+}
+
+// NumNTPMulticastServers returns the number of NTP multicast addresses received.
+func (c *Client) NumNTPMulticastServers() int { return len(c.ntpMulticast) }
+
+// AppendNTPServerNames appends NTP server FQDNs received from the server to dst.
+func (c *Client) AppendNTPServerNames(dst []dns.Name) []dns.Name { return append(dst, c.ntpNames...) }
+
+// NumNTPServerNames returns the number of NTP server FQDNs received.
+func (c *Client) NumNTPServerNames() int { return len(c.ntpNames) }
 
 // ConnectionID returns a pointer to the client's connection ID.
 // The value increments on each reset; callers should discard registrations when it changes.

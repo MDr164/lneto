@@ -121,7 +121,7 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | MLDv2 | RFC 3810 | ❌ | — | — | Not implemented |
 | IPv6 Node Requirements | RFC 8504 | ❌ | — | — | Not implemented as a conformance checklist |
 | DHCPv6 DNS Configuration | RFC 3646 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | Recursive DNS server and domain search options parsed and exposed |
-| DHCPv6 NTP Configuration | RFC 5908 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | NTP server address suboption parsed and exposed; multicast/FQDN ignored |
+| DHCPv6 NTP Configuration | RFC 5908 | ✅ | `dhcp/dhcpv6`, `x/xnet` | — | NTP server address, multicast address, and FQDN suboptions parsed and exposed |
 | DHCPv6 | RFC 8415 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | Client IA_NA address assignment; no IA_PD, relay, reconfigure, or server |
 | TLS 1.3 | RFC 8446 | ❌ | — | — | Not implemented |
 

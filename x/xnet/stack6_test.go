@@ -125,6 +125,8 @@ type dhcpv6ServerTestNode struct {
 	dnsServer    [16]byte
 	domainSearch []byte
 	ntpServer    [16]byte
+	ntpMulticast [16]byte
+	ntpName      []byte
 	clientIAID   [4]byte
 }
 
@@ -136,7 +138,7 @@ func (sv *dhcpv6ServerTestNode) Encapsulate(carrierData []byte, _, offsetToFrame
 	if sv.requestSeen {
 		msg = dhcpv6.MsgReply
 	}
-	n := appendDHCPv6ServerFrame(carrierData[offsetToFrame:], msg, sv.xid, sv.clientIAID, sv.assignedAddr, sv.dnsServer, sv.domainSearch, sv.ntpServer)
+	n := appendDHCPv6ServerFrame(carrierData[offsetToFrame:], msg, sv.xid, sv.clientIAID, sv.assignedAddr, sv.dnsServer, sv.domainSearch, sv.ntpServer, sv.ntpMulticast, sv.ntpName)
 	if sv.requestSeen {
 		sv.xid = 0
 	}
@@ -167,7 +169,7 @@ func (sv *dhcpv6ServerTestNode) ConnectionID() *uint64 {
 	return &sv.connID
 }
 
-func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4]byte, assigned, dnssv [16]byte, domainSearch []byte, ntp [16]byte) int {
+func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4]byte, assigned, dnssv [16]byte, domainSearch []byte, ntp, ntpMulticast [16]byte, ntpName []byte) int {
 	dst[0] = byte(msg)
 	dst[1] = byte(xid >> 16)
 	dst[2] = byte(xid >> 8)
@@ -191,13 +193,27 @@ func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4
 		n += writeDHCPv6Opt(dst[n:], dhcpv6.OptDomainList, domainSearch)
 	}
 	if ntp != ([16]byte{}) {
-		var ntpPayload [20]byte
-		binary.BigEndian.PutUint16(ntpPayload[0:2], 1)
-		binary.BigEndian.PutUint16(ntpPayload[2:4], 16)
-		copy(ntpPayload[4:], ntp[:])
-		n += writeDHCPv6Opt(dst[n:], dhcpv6.OptNTPServer, ntpPayload[:])
+		var ntpPayload []byte
+		ntpPayload = appendNTPServerAddrSuboption6(ntpPayload, 1, ntp)
+		if ntpMulticast != ([16]byte{}) {
+			ntpPayload = appendNTPServerAddrSuboption6(ntpPayload, 2, ntpMulticast)
+		}
+		if len(ntpName) > 0 {
+			nameStart := len(ntpPayload) + 4
+			ntpPayload = append(ntpPayload, 0, 3, 0, 0)
+			ntpPayload = append(ntpPayload, ntpName...)
+			binary.BigEndian.PutUint16(ntpPayload[nameStart-2:nameStart], uint16(len(ntpPayload)-nameStart))
+		}
+		n += writeDHCPv6Opt(dst[n:], dhcpv6.OptNTPServer, ntpPayload)
 	}
 	return n
+}
+
+func appendNTPServerAddrSuboption6(dst []byte, code uint16, addr [16]byte) []byte {
+	start := len(dst)
+	dst = append(dst, 0, 0, 0, 16)
+	binary.BigEndian.PutUint16(dst[start:start+2], code)
+	return append(dst, addr[:]...)
 }
 
 func writeDHCPv6Opt(dst []byte, code dhcpv6.OptCode, data []byte) int {
@@ -372,8 +388,10 @@ func TestStack6DHCPv6Request(t *testing.T) {
 	assigned := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10}
 	dnssv := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 53}
 	ntp := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 123}
+	ntpMulticast := [16]byte{0xff, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x01}
+	ntpName := appendDomainSearchList6(t, "time.example.com")
 	domainSearch := appendDomainSearchList6(t, "example.com", "corp.example.com")
-	sv := &dhcpv6ServerTestNode{assignedAddr: assigned, dnsServer: dnssv, domainSearch: domainSearch, ntpServer: ntp}
+	sv := &dhcpv6ServerTestNode{assignedAddr: assigned, dnsServer: dnssv, domainSearch: domainSearch, ntpServer: ntp, ntpMulticast: ntpMulticast, ntpName: ntpName}
 	var svUDP internet.StackUDPPort
 	svUDP.SetStackNode(sv, nil, dhcpv6.ClientPort)
 	if err := server.(*stack6).udps6.RegisterMACFiltered(&svUDP, nil); err != nil {
@@ -410,6 +428,12 @@ func TestStack6DHCPv6Request(t *testing.T) {
 	}
 	if len(got.NTPServers) != 1 || got.NTPServers[0] != netip.AddrFrom16(ntp) {
 		t.Errorf("NTPServers = %v, want %v", got.NTPServers, netip.AddrFrom16(ntp))
+	}
+	if len(got.NTPMulticast) != 1 || got.NTPMulticast[0] != netip.AddrFrom16(ntpMulticast) {
+		t.Errorf("NTPMulticast = %v, want %v", got.NTPMulticast, netip.AddrFrom16(ntpMulticast))
+	}
+	if len(got.NTPNames) != 1 || !got.NTPNames[0].EqualString("time.example.com") {
+		t.Errorf("NTPNames = %v", got.NTPNames)
 	}
 }
 

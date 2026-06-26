@@ -173,6 +173,7 @@ func TestClientParsesNTPServerOption(t *testing.T) {
 	serverDUID := []byte{0, 3, 0, 1, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
 	assignedAddr := [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 	ntpAddr := [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x7b}
+	ntpMulticast := [16]byte{0xff, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x01}
 	iaid := [4]byte{clientMAC[0], clientMAC[1], clientMAC[2], clientMAC[3]}
 
 	var cl Client
@@ -191,7 +192,7 @@ func TestClientParsesNTPServerOption(t *testing.T) {
 		t.Fatal("Encapsulate (Request):", err)
 	}
 
-	replyFrame := appendNTPServerOption(buildServerFrame(MsgReply, xid, serverDUID, iaid, assignedAddr), ntpAddr)
+	replyFrame := appendNTPServerOption(t, buildServerFrame(MsgReply, xid, serverDUID, iaid, assignedAddr), ntpAddr, ntpMulticast, "time.example.com")
 	if err := cl.Demux(replyFrame, 0); err != nil {
 		t.Fatal("Demux (Reply):", err)
 	}
@@ -202,6 +203,22 @@ func TestClientParsesNTPServerOption(t *testing.T) {
 	}
 	if n := cl.NumNTPServers(); n != 1 {
 		t.Fatalf("NumNTPServers = %d, want 1", n)
+	}
+	var multicasts []netip.Addr
+	multicasts = cl.AppendNTPMulticastServers(multicasts)
+	if len(multicasts) != 1 || multicasts[0] != netip.AddrFrom16(ntpMulticast) {
+		t.Fatalf("AppendNTPMulticastServers = %v, want %v", multicasts, netip.AddrFrom16(ntpMulticast))
+	}
+	if n := cl.NumNTPMulticastServers(); n != 1 {
+		t.Fatalf("NumNTPMulticastServers = %d, want 1", n)
+	}
+	var names []dns.Name
+	names = cl.AppendNTPServerNames(names)
+	if len(names) != 1 || !names[0].EqualString("time.example.com") {
+		t.Fatalf("AppendNTPServerNames = %v, want time.example.com", names)
+	}
+	if n := cl.NumNTPServerNames(); n != 1 {
+		t.Fatalf("NumNTPServerNames = %d, want 1", n)
 	}
 }
 
@@ -245,14 +262,32 @@ func TestClientParsesDomainSearchOption(t *testing.T) {
 	}
 }
 
-func appendNTPServerOption(frame []byte, addr [16]byte) []byte {
-	var ntpPayload [20]byte
-	binary.BigEndian.PutUint16(ntpPayload[0:2], 1)
-	binary.BigEndian.PutUint16(ntpPayload[2:4], 16)
-	copy(ntpPayload[4:], addr[:])
+func appendNTPServerOption(t testing.TB, frame []byte, addr, multicast [16]byte, fqdn string) []byte {
+	t.Helper()
+	var ntpPayload []byte
+	ntpPayload = appendNTPServerAddrSuboption(ntpPayload, 1, addr)
+	ntpPayload = appendNTPServerAddrSuboption(ntpPayload, 2, multicast)
+	name, err := dns.NewName(fqdn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameStart := len(ntpPayload) + 4
+	ntpPayload = append(ntpPayload, 0, 3, 0, 0)
+	ntpPayload, err = name.AppendTo(ntpPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.BigEndian.PutUint16(ntpPayload[nameStart-2:nameStart], uint16(len(ntpPayload)-nameStart))
 	buf := append(frame[:len(frame):len(frame)], make([]byte, 4+len(ntpPayload))...)
-	writeOpt6(buf[len(frame):], OptNTPServer, ntpPayload[:]...)
+	writeOpt6(buf[len(frame):], OptNTPServer, ntpPayload...)
 	return buf
+}
+
+func appendNTPServerAddrSuboption(dst []byte, code uint16, addr [16]byte) []byte {
+	start := len(dst)
+	dst = append(dst, 0, 0, 0, 16)
+	binary.BigEndian.PutUint16(dst[start:start+2], code)
+	return append(dst, addr[:]...)
 }
 
 func appendDomainSearchOption(t testing.TB, frame []byte, domains ...string) []byte {

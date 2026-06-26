@@ -44,6 +44,8 @@ type DHCPResultsV6 struct {
 	DNSServers    []netip.Addr
 	DomainSearch  []dns.Name
 	NTPServers    []netip.Addr
+	NTPMulticast  []netip.Addr
+	NTPNames      []dns.Name
 	AssignedAddr6 [16]byte
 	TRebind       uint32
 	TRenewal      uint32
@@ -198,10 +200,14 @@ func (s *stack6) ResultDHCPv6() (*DHCPResultsV6, error) {
 		DNSServers:    s.dhcp6res.DNSServers[:0],
 		DomainSearch:  s.dhcp6res.DomainSearch[:0],
 		NTPServers:    s.dhcp6res.NTPServers[:0],
+		NTPMulticast:  s.dhcp6res.NTPMulticast[:0],
+		NTPNames:      s.dhcp6res.NTPNames[:0],
 	}
 	s.dhcp6res.DNSServers = s.dhcp6.AppendDNSServers(s.dhcp6res.DNSServers)
 	s.dhcp6res.DomainSearch = s.dhcp6.AppendDomainSearch(s.dhcp6res.DomainSearch)
 	s.dhcp6res.NTPServers = s.dhcp6.AppendNTPServers(s.dhcp6res.NTPServers)
+	s.dhcp6res.NTPMulticast = s.dhcp6.AppendNTPMulticastServers(s.dhcp6res.NTPMulticast)
+	s.dhcp6res.NTPNames = s.dhcp6.AppendNTPServerNames(s.dhcp6res.NTPNames)
 	return &s.dhcp6res, nil
 }
 
