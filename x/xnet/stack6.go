@@ -34,6 +34,8 @@ type Stack6 interface {
 	RegisterListenerUDP6(pktconn *udp.PacketConn) error
 	RegisterUDPNode6(port *internet.StackUDPPort, node lneto.StackNode, raddr [16]byte, rport uint16) error
 	ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok bool, err error)
+	AppendRouterDNSServers6(dst []netip.Addr) []netip.Addr
+	AppendRouterDNSSearch6(dst []dns.Name) []dns.Name
 	RouteMTU6(addr [16]byte) (mtu uint32, ok bool)
 	StartDHCPv6Request() error
 	ResultDHCPv6() (*DHCPResultsV6, error)
@@ -71,6 +73,8 @@ type stack6 struct {
 	dhcpUDP6 internet.StackUDPPort
 	dhcp6    dhcpv6.Client
 	dhcp6res DHCPResultsV6
+	raDNS    []netip.Addr
+	raSearch []dns.Name
 	// ndpPending tracks in-flight NDP MAC resolves for outbound connections.
 	// macBuf is shared with the registered node so macResolve patches it in place.
 	ndpPending []struct {
@@ -104,6 +108,8 @@ func (s *stack6) Reset6(cfg *StackConfig) error {
 	s.ip6.SetAddr6(cfg.StaticAddress6)
 	s.rand = uint32(cfg.RandSeed)
 	s.hwaddr = cfg.HardwareAddress
+	s.raDNS = s.raDNS[:0]
+	s.raSearch = s.raSearch[:0]
 	s.ip6.SetAcceptMulticast6(true) // IPv6 needs multicast to work.
 
 	s.tcps6.ResetTCP(cfg.MaxActiveTCPPorts)
@@ -184,23 +190,59 @@ func (s *stack6) RegisterUDPNode6(port *internet.StackUDPPort, node lneto.StackN
 // /64 Prefix Information option.
 func (s *stack6) ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok bool, err error) {
 	err = icmpv6.ForEachOption(options, func(option []byte) error {
-		if ok || option[0] != icmpv6.OptPrefixInformation {
+		switch option[0] {
+		case icmpv6.OptPrefixInformation:
+			if ok {
+				return nil
+			}
+			info, parsed := icmpv6.ParsePrefixInformationOption(option)
+			if !parsed {
+				return lneto.ErrInvalidField
+			}
+			if !info.Autonomous || info.ValidLifetime == 0 {
+				return nil
+			}
+			addr, ok = ipv6.SLAACAddrFromMAC(info.Prefix, s.hwaddr)
+			if !ok {
+				return nil
+			}
+			return s.SetAddr6(addr.As16())
+		case icmpv6.OptRecursiveDNSServer:
+			lifetime, servers, parsed := icmpv6.ParseRDNSSOption(s.raDNS[:0], option)
+			if !parsed {
+				return lneto.ErrInvalidField
+			}
+			if lifetime == 0 {
+				s.raDNS = s.raDNS[:0]
+			} else {
+				s.raDNS = servers
+			}
+		case icmpv6.OptDNSSearchList:
+			lifetime, names, parsed := icmpv6.ParseDNSSLOption(s.raSearch[:0], option)
+			if !parsed {
+				return lneto.ErrInvalidField
+			}
+			if lifetime == 0 {
+				s.raSearch = s.raSearch[:0]
+			} else {
+				s.raSearch = names
+			}
+		default:
 			return nil
 		}
-		info, parsed := icmpv6.ParsePrefixInformationOption(option)
-		if !parsed {
-			return lneto.ErrInvalidField
-		}
-		if !info.Autonomous || info.ValidLifetime == 0 {
-			return nil
-		}
-		addr, ok = ipv6.SLAACAddrFromMAC(info.Prefix, s.hwaddr)
-		if !ok {
-			return nil
-		}
-		return s.SetAddr6(addr.As16())
+		return nil
 	})
 	return addr, ok, err
+}
+
+// AppendRouterDNSServers6 appends DNS servers learned from IPv6 Router Advertisements.
+func (s *stack6) AppendRouterDNSServers6(dst []netip.Addr) []netip.Addr {
+	return append(dst, s.raDNS...)
+}
+
+// AppendRouterDNSSearch6 appends DNS search domains learned from IPv6 Router Advertisements.
+func (s *stack6) AppendRouterDNSSearch6(dst []dns.Name) []dns.Name {
+	return append(dst, s.raSearch...)
 }
 
 func (s *stack6) applyRouterAdvertisement6(options []byte) error {

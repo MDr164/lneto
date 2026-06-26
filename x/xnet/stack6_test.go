@@ -419,6 +419,36 @@ func TestStack6IngressRouterAdvertisementSLAAC(t *testing.T) {
 	}
 }
 
+func TestStack6IngressRouterAdvertisementDNS(t *testing.T) {
+	cfg := StackConfig{
+		Hostname:       "passive-dns-1",
+		RandSeed:       1,
+		ICMPQueueLimit: 1,
+	}
+	s := DefaultStack6()
+	if err := s.Reset6(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnableICMP6(true); err != nil {
+		t.Fatal(err)
+	}
+	dnssv := netip.MustParseAddr("2001:db8::53")
+	rdnss := makeRouterAdvertisementRDNSSOption(1200, dnssv)
+	dnssl := makeRouterAdvertisementDNSSLOption(t, 1200, "example.com")
+	buf := makeRouterAdvertisementIPv6(t, append(rdnss[:], dnssl...))
+	if err := s.IngressIPv6(buf); err != nil {
+		t.Fatal(err)
+	}
+	servers := s.AppendRouterDNSServers6(nil)
+	if len(servers) != 1 || servers[0] != dnssv {
+		t.Fatalf("AppendRouterDNSServers6 = %v, want %v", servers, dnssv)
+	}
+	search := s.AppendRouterDNSSearch6(nil)
+	if len(search) != 1 || !search[0].EqualString("example.com") {
+		t.Fatalf("AppendRouterDNSSearch6 = %v", search)
+	}
+}
+
 func TestStack6PacketTooBigRouteMTU(t *testing.T) {
 	const mtu = 1280
 	cfg := StackConfig{
@@ -474,6 +504,32 @@ func makePacketTooBigIPv6(t testing.TB, ourAddr, invokedDst [16]byte, mtu uint32
 	invoked.SetVersionTrafficAndFlow(6, 0, 0)
 	*invoked.SourceAddr() = ourAddr
 	*invoked.DestinationAddr() = invokedDst
+	icmp.SetCRC(0)
+	var crc lneto.CRC791
+	ifrm.CRCWritePseudo(&crc)
+	icmp.SetCRC(crc.PayloadSum16(buf[ipv6HeaderSize:]))
+	return buf
+}
+
+func makeRouterAdvertisementIPv6(t testing.TB, options []byte) []byte {
+	t.Helper()
+	buf := make([]byte, ipv6HeaderSize+16+len(options))
+	ifrm, err := ipv6.NewFrame(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ifrm.SetVersionTrafficAndFlow(6, 0, 0)
+	ifrm.SetPayloadLength(uint16(len(buf) - ipv6HeaderSize))
+	ifrm.SetNextHeader(lneto.IPProtoIPv6ICMP)
+	ifrm.SetHopLimit(255)
+	*ifrm.SourceAddr() = netip.MustParseAddr("fe80::1").As16()
+	*ifrm.DestinationAddr() = netip.MustParseAddr("ff02::1").As16()
+	icmp, err := icmpv6.NewFrame(buf[ipv6HeaderSize:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	icmp.SetType(icmpv6.TypeRouterAdvertisement)
+	copy(buf[ipv6HeaderSize+16:], options)
 	icmp.SetCRC(0)
 	var crc lneto.CRC791
 	ifrm.CRCWritePseudo(&crc)
