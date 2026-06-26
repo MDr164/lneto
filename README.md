@@ -109,7 +109,7 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | Ethernet PHY/MDIO | IEEE 802.3 cl.22/45 | ✅ | `phy` | — | Bare-metal PHY management via MDIO |
 | IPv6 | RFC 8200 | ✅ | `ipv6` | — | Frame parsing and stack handling |
 | IPv6 Addressing Architecture | RFC 4291 | 🟡 | `ipv6`, `x/xnet` | — | Basic 128-bit address handling; no address selection policy |
-| IPv6 Scoped Address Architecture | RFC 4007 | 🟡 | `ipv6` | — | Address scope classification helpers; zone identifiers not implemented |
+| IPv6 Scoped Address Architecture | RFC 4007 | ✅ | `ipv6` | — | Address scope classification and numeric zone identifier representation |
 | ICMPv6 | RFC 4443 | ✅ | `ipv6/icmpv6` | — | Echo+NDP frame parsing and stack handling |
 | IPv6 Neighbor Discovery | RFC 4861 | 🟡 | `ipv6/icmpv6`, `x/xnet` | — | Neighbor solicitation/advertisement cache, RA fixed-header reports, RA prefix option parsing, and passive RA callback; router state incomplete |
 | IPv6 SLAAC | RFC 4862 | 🟡 | `ipv6`, `x/xnet` | — | Stable modified EUI-64 address derivation and RA prefix application; no DAD lifecycle |

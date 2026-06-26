@@ -2,6 +2,7 @@ package ipv6
 
 import (
 	"net/netip"
+	"strconv"
 
 	"github.com/soypat/lneto/ipv4"
 )
@@ -11,6 +12,12 @@ const (
 )
 
 type ToS = ipv4.ToS
+
+// ScopedAddr is an IPv6 address with an RFC 4007 numeric zone identifier.
+type ScopedAddr struct {
+	Addr [16]byte
+	Zone uint32
+}
 
 // Scope identifies an IPv6 address scope from RFC 4007.
 type Scope uint8
@@ -48,6 +55,32 @@ func IsMulticast(addr [16]byte) bool { return addr[0] == 0xff }
 
 // IsLinkLocalUnicast reports whether addr is an IPv6 link-local unicast address.
 func IsLinkLocalUnicast(addr [16]byte) bool { return addr[0] == 0xfe && addr[1]&0xc0 == 0x80 }
+
+// NewScopedAddr returns addr with zone. A non-zero zone is only meaningful for
+// non-global scopes; global addresses are returned with zone zero.
+func NewScopedAddr(addr [16]byte, zone uint32) ScopedAddr {
+	if AddrScope(addr) == ScopeGlobal {
+		zone = 0
+	}
+	return ScopedAddr{Addr: addr, Zone: zone}
+}
+
+// Scope returns the RFC 4007 scope of addr.
+func (addr ScopedAddr) Scope() Scope { return AddrScope(addr.Addr) }
+
+// HasZone reports whether addr has a zone identifier.
+func (addr ScopedAddr) HasZone() bool { return addr.Zone != 0 }
+
+// AppendFormatScopedAddr appends addr as an IPv6 address with a numeric zone
+// identifier when present.
+func AppendFormatScopedAddr(dst []byte, addr ScopedAddr) []byte {
+	dst = AppendFormatAddr(dst, addr.Addr)
+	if addr.Zone != 0 {
+		dst = append(dst, '%')
+		dst = strconv.AppendUint(dst, uint64(addr.Zone), 10)
+	}
+	return dst
+}
 
 // SLAACAddrFromMAC returns the stable IPv6 SLAAC address for prefix and mac.
 // The prefix must be an IPv6 /64. The interface identifier is derived using

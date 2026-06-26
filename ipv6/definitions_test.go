@@ -42,6 +42,32 @@ func TestIPv6ScopePredicates(t *testing.T) {
 	}
 }
 
+func TestScopedAddr(t *testing.T) {
+	linkLocal := netip.MustParseAddr("fe80::1").As16()
+	scoped := NewScopedAddr(linkLocal, 3)
+	if scoped.Scope() != ScopeLinkLocal || !scoped.HasZone() || scoped.Zone != 3 {
+		t.Fatalf("NewScopedAddr link-local = %+v", scoped)
+	}
+	if got := string(AppendFormatScopedAddr(nil, scoped)); got != "fe80::1%3" {
+		t.Fatalf("AppendFormatScopedAddr = %q, want %q", got, "fe80::1%3")
+	}
+	global := NewScopedAddr(netip.MustParseAddr("2001:db8::1").As16(), 3)
+	if global.HasZone() || global.Zone != 0 {
+		t.Fatalf("NewScopedAddr global kept zone: %+v", global)
+	}
+}
+
+func TestAppendFormatScopedAddrNoAllocs(t *testing.T) {
+	var buf [64]byte
+	addr := NewScopedAddr(netip.MustParseAddr("fe80::1").As16(), 3)
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = AppendFormatScopedAddr(buf[:0], addr)
+	})
+	if allocs != 0 {
+		t.Errorf("expected 0 allocs, got %v", allocs)
+	}
+}
+
 func TestSLAACAddrFromMAC(t *testing.T) {
 	addr, ok := SLAACAddrFromMAC(netip.MustParsePrefix("2001:db8:1:2::/64"), [6]byte{0x00, 0x25, 0x96, 0x12, 0x34, 0x56})
 	if !ok {
