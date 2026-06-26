@@ -578,6 +578,35 @@ func TestStack6DHCPv6Request(t *testing.T) {
 	}
 }
 
+func TestStackAsyncAssimilateDHCPv6Results(t *testing.T) {
+	assigned := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10}
+	dnssv := netip.MustParseAddr("fd00:4e42:1::53")
+	var stack StackAsync
+	if err := stack.Reset(StackConfig{
+		Hostname:          "async6-1",
+		RandSeed:          1,
+		HardwareAddress:   [6]byte{1, 2, 3, 4, 5, 6},
+		IPv6Stack:         DefaultStack6(),
+		MTU:               mtu6Test,
+		MaxActiveUDPPorts: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := stack.AssimilateDHCPv6Results(&DHCPResultsV6{
+		AssignedAddr6: assigned,
+		DNSServers:    []netip.Addr{dnssv},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stack.Addr6(); got != assigned {
+		t.Fatalf("Addr6 = %v, want %v", got, assigned)
+	}
+	if stack.dnssv != dnssv {
+		t.Fatalf("dnssv = %v, want %v", stack.dnssv, dnssv)
+	}
+}
+
 func appendDomainSearchList6(t testing.TB, domains ...string) []byte {
 	t.Helper()
 	var payload []byte

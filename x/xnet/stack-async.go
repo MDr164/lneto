@@ -829,6 +829,28 @@ func (stack *StackAsync) AssimilateDHCPResults(results *DHCPResults) error {
 	return nil
 }
 
+// AssimilateDHCPv6Results sets the stack's IPv6 address and DNS server from
+// completed DHCPv6 results.
+func (stack *StackAsync) AssimilateDHCPv6Results(results *DHCPResultsV6) error {
+	stack.mu.Lock()
+	defer stack.mu.Unlock()
+	if !stack.ipv6enabled {
+		return lneto.ErrUnsupported
+	}
+	if !internal.IsZeroed(results.AssignedAddr6) {
+		if err := stack.stack6.SetAddr6(results.AssignedAddr6); err != nil {
+			return err
+		}
+	}
+	if len(results.DNSServers) > 0 {
+		if !results.DNSServers[0].IsValid() || !results.DNSServers[0].Is6() {
+			return lneto.ErrInvalidAddr
+		}
+		stack.dnssv = results.DNSServers[0]
+	}
+	return nil
+}
+
 func (s *StackAsync) populateDHCPResults() error {
 	if !s.dhcp.State().HasIP() {
 		return errors.New("DHCP not completed")

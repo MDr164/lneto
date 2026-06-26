@@ -122,7 +122,7 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | IPv6 Node Requirements | RFC 8504 | ❌ | — | — | Not implemented as a conformance checklist |
 | DHCPv6 DNS Configuration | RFC 3646 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | Recursive DNS server and domain search options parsed and exposed |
 | DHCPv6 NTP Configuration | RFC 5908 | ✅ | `dhcp/dhcpv6`, `x/xnet` | — | NTP server address, multicast address, and FQDN suboptions parsed and exposed |
-| DHCPv6 | RFC 8415 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | Client IA_NA address assignment and IA_PD prefix parsing; no relay, reconfigure, or server |
+| DHCPv6 | RFC 8415 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | Client IA_NA address assignment, IA_PD prefix parsing, and xnet result assimilation; no relay, reconfigure, or server |
 | TLS 1.3 | RFC 8446 | ❌ | — | — | Not implemented |
 
 ¹ `BenchmarkARPExchange` — full ARP request/response exchange over Ethernet: **0 B/op, 0 allocs/op**
