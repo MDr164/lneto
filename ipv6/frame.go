@@ -26,6 +26,14 @@ type Frame struct {
 	buf []byte
 }
 
+// ExtensionHeader describes one IPv6 extension header in a packet.
+type ExtensionHeader struct {
+	Protocol   lneto.IPProto
+	NextHeader lneto.IPProto
+	Offset     int
+	Length     int
+}
+
 // RawData returns the underlying slice with which the frame was created.
 func (i6frm Frame) RawData() []byte { return i6frm.buf }
 
@@ -34,6 +42,80 @@ func (i6frm Frame) RawData() []byte { return i6frm.buf }
 func (i6frm Frame) Payload() []byte {
 	pl := i6frm.PayloadLength()
 	return i6frm.buf[sizeHeader : sizeHeader+pl]
+}
+
+// ForEachExtensionHeader walks the IPv6 extension header chain and calls fn for
+// each extension header. It returns the terminal payload protocol and byte
+// offset from the start of the IPv6 frame to that payload.
+func (i6frm Frame) ForEachExtensionHeader(fn func(ExtensionHeader) error) (proto lneto.IPProto, payloadOffset int, err error) {
+	end := sizeHeader + int(i6frm.PayloadLength())
+	if end > len(i6frm.buf) {
+		return 0, 0, lneto.ErrInvalidLengthField
+	}
+	proto = i6frm.NextHeader()
+	off := sizeHeader
+	seen := 0
+	for isExtensionHeader(proto) {
+		if proto == lneto.IPProtoIPv6NoNxt {
+			return proto, end, nil
+		}
+		next, length, err := extensionHeaderLength(proto, i6frm.buf[off:end])
+		if err != nil {
+			return 0, 0, err
+		}
+		if off+length > end {
+			return 0, 0, lneto.ErrTruncatedFrame
+		}
+		hdr := ExtensionHeader{
+			Protocol:   proto,
+			NextHeader: next,
+			Offset:     off,
+			Length:     length,
+		}
+		if fn != nil {
+			if err := fn(hdr); err != nil {
+				return 0, 0, err
+			}
+		}
+		off += length
+		proto = next
+		seen++
+		if seen > 8 {
+			return 0, 0, lneto.ErrInvalidField
+		}
+	}
+	return proto, off, nil
+}
+
+func isExtensionHeader(proto lneto.IPProto) bool {
+	switch proto {
+	case lneto.IPProtoHopByHop, lneto.IPProtoIPv6Route, lneto.IPProtoIPv6Frag,
+		lneto.IPProtoAH, lneto.IPProtoIPv6Opts, lneto.IPProtoIPv6NoNxt:
+		return true
+	default:
+		return false
+	}
+}
+
+func extensionHeaderLength(proto lneto.IPProto, b []byte) (next lneto.IPProto, length int, err error) {
+	if proto == lneto.IPProtoIPv6NoNxt {
+		return proto, 0, nil
+	}
+	if len(b) < 2 {
+		return 0, 0, lneto.ErrTruncatedFrame
+	}
+	next = lneto.IPProto(b[0])
+	switch proto {
+	case lneto.IPProtoHopByHop, lneto.IPProtoIPv6Route, lneto.IPProtoIPv6Opts:
+		length = (int(b[1]) + 1) * 8
+	case lneto.IPProtoIPv6Frag:
+		length = 8
+	case lneto.IPProtoAH:
+		length = (int(b[1]) + 2) * 4
+	default:
+		return 0, 0, lneto.ErrUnsupported
+	}
+	return next, length, nil
 }
 
 // VersionTrafficAndFlow returns the version, Traffic and Flow label fields of the IPv6 header.
