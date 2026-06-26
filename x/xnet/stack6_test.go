@@ -351,6 +351,28 @@ func TestStackAsyncApplyRouterAdvertisementRDNSS(t *testing.T) {
 	}
 }
 
+func TestStackAsyncApplyRouterAdvertisementDNSSL(t *testing.T) {
+	var stack StackAsync
+	if err := stack.Reset(StackConfig{
+		Hostname:          "ra-dnssl-1",
+		RandSeed:          1,
+		HardwareAddress:   [6]byte{1, 2, 3, 4, 5, 6},
+		IPv6Stack:         DefaultStack6(),
+		MTU:               mtu6Test,
+		MaxActiveUDPPorts: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opt := makeRouterAdvertisementDNSSLOption(t, 1200, "example.com", "corp.example.com")
+	if _, _, err := stack.ApplyRouterAdvertisement6(opt); err != nil {
+		t.Fatal(err)
+	}
+	got := stack.AppendDNSSearch(nil)
+	if len(got) != 2 || !got[0].EqualString("example.com") || !got[1].EqualString("corp.example.com") {
+		t.Fatalf("AppendDNSSearch = %v", got)
+	}
+}
+
 func TestStack6IngressRouterAdvertisementSLAAC(t *testing.T) {
 	cfg := StackConfig{
 		Hostname:        "passive-ra-1",
@@ -419,6 +441,18 @@ func makeRouterAdvertisementRDNSSOption(lifetime uint32, addr netip.Addr) [24]by
 	binary.BigEndian.PutUint32(buf[4:8], lifetime)
 	a := addr.As16()
 	copy(buf[8:], a[:])
+	return buf
+}
+
+func makeRouterAdvertisementDNSSLOption(t testing.TB, lifetime uint32, domains ...string) []byte {
+	t.Helper()
+	buf := []byte{icmpv6.OptDNSSearchList, 0, 0, 0, 0, 0, 0, 0}
+	binary.BigEndian.PutUint32(buf[4:8], lifetime)
+	buf = append(buf, appendDomainSearchList6(t, domains...)...)
+	for len(buf)%8 != 0 {
+		buf = append(buf, 0)
+	}
+	buf[1] = byte(len(buf) / 8)
 	return buf
 }
 

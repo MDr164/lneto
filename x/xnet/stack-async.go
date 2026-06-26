@@ -48,12 +48,13 @@ type StackAsync struct {
 	dhcpResults DHCPResults
 	arpt        subnetTable
 
-	dnsUDP  internet.StackUDPPort
-	dnsUDP6 internet.StackUDPPort
-	dns     dns.Client
-	ednsopt dns.Resource
-	lookup  dns.Message
-	dnssv   netip.Addr
+	dnsUDP    internet.StackUDPPort
+	dnsUDP6   internet.StackUDPPort
+	dns       dns.Client
+	ednsopt   dns.Resource
+	lookup    dns.Message
+	dnssv     netip.Addr
+	dnsSearch []dns.Name
 
 	ntpUDP internet.StackUDPPort
 	ntp    ntp.Client
@@ -794,19 +795,38 @@ func (s *StackAsync) ApplyRouterAdvertisement6(options []byte) (addr netip.Addr,
 		return netip.Addr{}, false, err
 	}
 	err = icmpv6.ForEachOption(options, func(option []byte) error {
-		if option[0] != icmpv6.OptRecursiveDNSServer {
+		switch option[0] {
+		case icmpv6.OptRecursiveDNSServer:
+			lifetime, server, parsed := firstRDNSSServer(option)
+			if !parsed {
+				return lneto.ErrInvalidField
+			}
+			if lifetime != 0 {
+				s.dnssv = server
+			}
+		case icmpv6.OptDNSSearchList:
+			lifetime, names, parsed := icmpv6.ParseDNSSLOption(s.dnsSearch[:0], option)
+			if !parsed {
+				return lneto.ErrInvalidField
+			}
+			if lifetime == 0 {
+				s.dnsSearch = s.dnsSearch[:0]
+			} else {
+				s.dnsSearch = names
+			}
+		default:
 			return nil
-		}
-		lifetime, server, parsed := firstRDNSSServer(option)
-		if !parsed {
-			return lneto.ErrInvalidField
-		}
-		if lifetime != 0 {
-			s.dnssv = server
 		}
 		return nil
 	})
 	return addr, ok, err
+}
+
+// AppendDNSSearch appends configured DNS search domains to dst.
+func (s *StackAsync) AppendDNSSearch(dst []dns.Name) []dns.Name {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append(dst, s.dnsSearch...)
 }
 
 func firstRDNSSServer(option []byte) (lifetime uint32, server netip.Addr, ok bool) {
