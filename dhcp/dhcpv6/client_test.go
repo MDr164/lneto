@@ -262,6 +262,50 @@ func TestClientParsesDomainSearchOption(t *testing.T) {
 	}
 }
 
+func TestClientParsesDelegatedPrefix(t *testing.T) {
+	const xid = 0x304050
+	clientMAC := [6]byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	serverDUID := []byte{0, 3, 0, 1, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	assignedAddr := [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	delegated := netip.MustParsePrefix("2001:db8:abcd::/48")
+	iaid := [4]byte{clientMAC[0], clientMAC[1], clientMAC[2], clientMAC[3]}
+
+	var cl Client
+	if err := cl.BeginRequest(xid, RequestConfig{ClientHardwareAddr: clientMAC}); err != nil {
+		t.Fatal("BeginRequest:", err)
+	}
+	var buf [1024]byte
+	if _, err := cl.Encapsulate(buf[:], -1, 0); err != nil {
+		t.Fatal("Encapsulate (Solicit):", err)
+	}
+	advFrame := buildServerFrame(MsgAdvertise, xid, serverDUID, iaid, assignedAddr)
+	if err := cl.Demux(advFrame, 0); err != nil {
+		t.Fatal("Demux (Advertise):", err)
+	}
+	if _, err := cl.Encapsulate(buf[:], -1, 0); err != nil {
+		t.Fatal("Encapsulate (Request):", err)
+	}
+
+	replyFrame := appendIAPDOption(buildServerFrame(MsgReply, xid, serverDUID, iaid, assignedAddr), iaid, delegated)
+	if err := cl.Demux(replyFrame, 0); err != nil {
+		t.Fatal("Demux (Reply):", err)
+	}
+	var prefixes []DelegatedPrefix
+	prefixes = cl.AppendDelegatedPrefixes(prefixes)
+	if len(prefixes) != 1 {
+		t.Fatalf("AppendDelegatedPrefixes len = %d, want 1", len(prefixes))
+	}
+	if prefixes[0].Prefix != delegated || prefixes[0].PreferredLifetime != 1800 || prefixes[0].ValidLifetime != 3600 {
+		t.Fatalf("delegated prefix = %+v, want %s preferred=1800 valid=3600", prefixes[0], delegated)
+	}
+	if n := cl.NumDelegatedPrefixes(); n != 1 {
+		t.Fatalf("NumDelegatedPrefixes = %d, want 1", n)
+	}
+	if cl.PrefixDelegationRenewalSeconds() != 900 || cl.PrefixDelegationRebindingSeconds() != 1800 {
+		t.Fatalf("IA_PD timers = renewal:%d rebind:%d, want 900/1800", cl.PrefixDelegationRenewalSeconds(), cl.PrefixDelegationRebindingSeconds())
+	}
+}
+
 func appendNTPServerOption(t testing.TB, frame []byte, addr, multicast [16]byte, fqdn string) []byte {
 	t.Helper()
 	var ntpPayload []byte
@@ -305,6 +349,25 @@ func appendDomainSearchOption(t testing.TB, frame []byte, domains ...string) []b
 	}
 	buf := append(frame[:len(frame):len(frame)], make([]byte, 4+len(payload))...)
 	writeOpt6(buf[len(frame):], OptDomainList, payload...)
+	return buf
+}
+
+func appendIAPDOption(frame []byte, iaid [4]byte, prefix netip.Prefix) []byte {
+	var iaPrefix [29]byte
+	binary.BigEndian.PutUint16(iaPrefix[0:2], uint16(OptIAPrefix))
+	binary.BigEndian.PutUint16(iaPrefix[2:4], 25)
+	binary.BigEndian.PutUint32(iaPrefix[4:8], 1800)
+	binary.BigEndian.PutUint32(iaPrefix[8:12], 3600)
+	iaPrefix[12] = byte(prefix.Bits())
+	prefixAddr := prefix.Addr().As16()
+	copy(iaPrefix[13:], prefixAddr[:])
+	var iapd [41]byte
+	copy(iapd[:4], iaid[:])
+	binary.BigEndian.PutUint32(iapd[4:8], 900)
+	binary.BigEndian.PutUint32(iapd[8:12], 1800)
+	copy(iapd[12:], iaPrefix[:])
+	buf := append(frame[:len(frame):len(frame)], make([]byte, 4+len(iapd))...)
+	writeOpt6(buf[len(frame):], OptIAPD, iapd[:]...)
 	return buf
 }
 

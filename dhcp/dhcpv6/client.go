@@ -17,6 +17,13 @@ type RequestConfig struct {
 	ClientHardwareAddr [6]byte
 }
 
+// DelegatedPrefix is an IPv6 prefix delegated by a DHCPv6 server.
+type DelegatedPrefix struct {
+	Prefix            netip.Prefix
+	PreferredLifetime uint32
+	ValidLifetime     uint32
+}
+
 // Client is a stateful DHCPv6 client implementing the [lneto.StackNode] interface.
 // It manages the Solicit→Advertise→Request→Reply exchange (RFC 8415 §18).
 //
@@ -52,6 +59,9 @@ type Client struct {
 	// ntpNames accumulates NTP server FQDNs (OptNTPServer, suboption 3).
 	// Client owns the backing array; cleared on reset, capacity reused.
 	ntpNames []dns.Name
+	// delegatedPrefixes accumulates IA_PD prefixes (OptIAPD/OptIAPrefix).
+	// Client owns the backing array; cleared on reset, capacity reused.
+	delegatedPrefixes []DelegatedPrefix
 
 	assignedAddr      [16]byte
 	assignedAddrValid bool
@@ -63,6 +73,8 @@ type Client struct {
 	t1, t2            uint32
 	preferredLifetime uint32
 	validLifetime     uint32
+	// IA_PD timers from the server's Advertise/Reply.
+	pdT1, pdT2 uint32
 
 	clientMAC [6]byte
 
@@ -96,17 +108,18 @@ func (c *Client) Reset() { c.reset() }
 // connection ID is incremented to invalidate any existing stack registrations.
 func (c *Client) reset() {
 	*c = Client{
-		connID:       c.connID + 1,
-		xid:          c.xid,
-		clientMAC:    c.clientMAC,
-		iaid:         c.iaid,
-		duid:         c.duid,
-		serverDUID:   c.serverDUID[:0],
-		dns:          c.dns[:0],
-		domainSearch: c.domainSearch[:0],
-		ntps:         c.ntps[:0],
-		ntpMulticast: c.ntpMulticast[:0],
-		ntpNames:     c.ntpNames[:0],
+		connID:            c.connID + 1,
+		xid:               c.xid,
+		clientMAC:         c.clientMAC,
+		iaid:              c.iaid,
+		duid:              c.duid,
+		serverDUID:        c.serverDUID[:0],
+		dns:               c.dns[:0],
+		domainSearch:      c.domainSearch[:0],
+		ntps:              c.ntps[:0],
+		ntpMulticast:      c.ntpMulticast[:0],
+		ntpNames:          c.ntpNames[:0],
+		delegatedPrefixes: c.delegatedPrefixes[:0],
 	}
 }
 
@@ -241,6 +254,8 @@ func (c *Client) setOptions(frm Frame) error {
 			c.serverDUID = append(c.serverDUID[:0], data...)
 		case OptIANA:
 			c.parseIANA(data)
+		case OptIAPD:
+			c.parseIAPD(data)
 		case OptDNSServers:
 			if len(c.dns) > 0 || len(data)%16 != 0 {
 				break // skip if already populated or malformed
@@ -255,6 +270,42 @@ func (c *Client) setOptions(frm Frame) error {
 		}
 		return nil
 	})
+}
+
+func (c *Client) parseIAPD(data []byte) {
+	if len(c.delegatedPrefixes) > 0 {
+		return
+	}
+	if len(data) < 12 {
+		return
+	}
+	t1 := binary.BigEndian.Uint32(data[4:8])
+	t2 := binary.BigEndian.Uint32(data[8:12])
+
+	for ptr := 12; ptr+4 <= len(data); {
+		subCode := OptCode(binary.BigEndian.Uint16(data[ptr:]))
+		subLen := int(binary.BigEndian.Uint16(data[ptr+2:]))
+		if ptr+4+subLen > len(data) {
+			break
+		}
+		if subCode == OptIAPrefix && subLen >= 25 {
+			sub := data[ptr+4 : ptr+4+subLen]
+			bits := int(sub[8])
+			prefix := netip.PrefixFrom(netip.AddrFrom16([16]byte(sub[9:25])), bits)
+			if prefix.IsValid() {
+				c.delegatedPrefixes = append(c.delegatedPrefixes, DelegatedPrefix{
+					Prefix:            prefix.Masked(),
+					PreferredLifetime: binary.BigEndian.Uint32(sub[:4]),
+					ValidLifetime:     binary.BigEndian.Uint32(sub[4:8]),
+				})
+			}
+		}
+		ptr += 4 + subLen
+	}
+	if len(c.delegatedPrefixes) > 0 {
+		c.pdT1 = t1
+		c.pdT2 = t2
+	}
 }
 
 func (c *Client) parseNTPServer(data []byte) {
@@ -371,6 +422,20 @@ func (c *Client) PreferredLifetimeSeconds() uint32 { return c.preferredLifetime 
 
 // ValidLifetimeSeconds returns the valid lifetime of the assigned address.
 func (c *Client) ValidLifetimeSeconds() uint32 { return c.validLifetime }
+
+// PrefixDelegationRebindingSeconds returns the IA_PD T2 timer from the server.
+func (c *Client) PrefixDelegationRebindingSeconds() uint32 { return c.pdT2 }
+
+// PrefixDelegationRenewalSeconds returns the IA_PD T1 timer from the server.
+func (c *Client) PrefixDelegationRenewalSeconds() uint32 { return c.pdT1 }
+
+// AppendDelegatedPrefixes appends delegated IPv6 prefixes received from the server to dst.
+func (c *Client) AppendDelegatedPrefixes(dst []DelegatedPrefix) []DelegatedPrefix {
+	return append(dst, c.delegatedPrefixes...)
+}
+
+// NumDelegatedPrefixes returns the number of delegated IPv6 prefixes received.
+func (c *Client) NumDelegatedPrefixes() int { return len(c.delegatedPrefixes) }
 
 // AppendDNSServers appends the DNS server addresses received from the server to dst.
 func (c *Client) AppendDNSServers(dst []netip.Addr) []netip.Addr { return append(dst, c.dns...) }

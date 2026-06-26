@@ -46,11 +46,14 @@ type DHCPResultsV6 struct {
 	NTPServers    []netip.Addr
 	NTPMulticast  []netip.Addr
 	NTPNames      []dns.Name
+	Delegated     []dhcpv6.DelegatedPrefix
 	AssignedAddr6 [16]byte
 	TRebind       uint32
 	TRenewal      uint32
 	TPreferred    uint32
 	TValid        uint32
+	TPDRebind     uint32
+	TPDRenewal    uint32
 }
 
 type stack6 struct {
@@ -197,17 +200,21 @@ func (s *stack6) ResultDHCPv6() (*DHCPResultsV6, error) {
 		TRenewal:      s.dhcp6.RenewalSeconds(),
 		TPreferred:    s.dhcp6.PreferredLifetimeSeconds(),
 		TValid:        s.dhcp6.ValidLifetimeSeconds(),
+		TPDRebind:     s.dhcp6.PrefixDelegationRebindingSeconds(),
+		TPDRenewal:    s.dhcp6.PrefixDelegationRenewalSeconds(),
 		DNSServers:    s.dhcp6res.DNSServers[:0],
 		DomainSearch:  s.dhcp6res.DomainSearch[:0],
 		NTPServers:    s.dhcp6res.NTPServers[:0],
 		NTPMulticast:  s.dhcp6res.NTPMulticast[:0],
 		NTPNames:      s.dhcp6res.NTPNames[:0],
+		Delegated:     s.dhcp6res.Delegated[:0],
 	}
 	s.dhcp6res.DNSServers = s.dhcp6.AppendDNSServers(s.dhcp6res.DNSServers)
 	s.dhcp6res.DomainSearch = s.dhcp6.AppendDomainSearch(s.dhcp6res.DomainSearch)
 	s.dhcp6res.NTPServers = s.dhcp6.AppendNTPServers(s.dhcp6res.NTPServers)
 	s.dhcp6res.NTPMulticast = s.dhcp6.AppendNTPMulticastServers(s.dhcp6res.NTPMulticast)
 	s.dhcp6res.NTPNames = s.dhcp6.AppendNTPServerNames(s.dhcp6res.NTPNames)
+	s.dhcp6res.Delegated = s.dhcp6.AppendDelegatedPrefixes(s.dhcp6res.Delegated)
 	return &s.dhcp6res, nil
 }
 
