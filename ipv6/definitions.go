@@ -1,6 +1,8 @@
 package ipv6
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"net/netip"
 	"strconv"
 
@@ -265,6 +267,23 @@ func SLAACAddrFromMAC(prefix netip.Prefix, mac [6]byte) (netip.Addr, bool) {
 	addr[13] = mac[3]
 	addr[14] = mac[4]
 	addr[15] = mac[5]
+	return netip.AddrFrom16(addr), true
+}
+
+// TemporarySLAACAddr returns a temporary IPv6 SLAAC address for prefix from a
+// caller-supplied random seed and counter. The prefix must be an IPv6 /64.
+func TemporarySLAACAddr(prefix netip.Prefix, seed [32]byte, counter uint64) (netip.Addr, bool) {
+	if !prefix.IsValid() || !prefix.Addr().Is6() || prefix.Bits() != 64 {
+		return netip.Addr{}, false
+	}
+	addr := prefix.Masked().Addr().As16()
+	var input [56]byte
+	copy(input[:32], seed[:])
+	copy(input[32:48], addr[:])
+	binary.BigEndian.PutUint64(input[48:], counter)
+	sum := sha256.Sum256(input[:])
+	copy(addr[8:], sum[:8])
+	addr[8] &^= 0x02
 	return netip.AddrFrom16(addr), true
 }
 

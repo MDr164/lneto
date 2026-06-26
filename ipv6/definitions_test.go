@@ -231,6 +231,40 @@ func TestSLAACAddrFromMACNoAllocs(t *testing.T) {
 	}
 }
 
+func TestTemporarySLAACAddr(t *testing.T) {
+	var seed [32]byte
+	for i := range seed {
+		seed[i] = byte(i)
+	}
+	prefix := netip.MustParsePrefix("2001:db8:1:2::/64")
+	addr1, ok := TemporarySLAACAddr(prefix, seed, 1)
+	if !ok {
+		t.Fatal("TemporarySLAACAddr ok=false, want true")
+	}
+	addr2, ok := TemporarySLAACAddr(prefix, seed, 2)
+	if !ok {
+		t.Fatal("TemporarySLAACAddr second ok=false, want true")
+	}
+	if addr1 == addr2 {
+		t.Fatal("TemporarySLAACAddr returned same address for different counters")
+	}
+	if !prefix.Contains(addr1) || !prefix.Contains(addr2) {
+		t.Fatalf("temporary addresses outside prefix: %s %s", addr1, addr2)
+	}
+	if addr1.As16()[8]&0x02 != 0 {
+		t.Fatalf("temporary interface ID universal/local bit set: %s", addr1)
+	}
+}
+
+func TestTemporarySLAACAddrInvalidPrefix(t *testing.T) {
+	if _, ok := TemporarySLAACAddr(netip.MustParsePrefix("2001:db8::/48"), [32]byte{}, 1); ok {
+		t.Fatal("TemporarySLAACAddr /48 ok=true, want false")
+	}
+	if _, ok := TemporarySLAACAddr(netip.MustParsePrefix("192.0.2.0/24"), [32]byte{}, 1); ok {
+		t.Fatal("TemporarySLAACAddr IPv4 ok=true, want false")
+	}
+}
+
 func TestAppendFormatAddr(t *testing.T) {
 	tests := []struct {
 		addr [16]byte

@@ -117,7 +117,7 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | IPv6 Extension Header Processing | RFC 8200, RFC 7045, RFC 7112 | 🟡 | `ipv6`, `internet` | — | Extension header chain parsing and inbound demux; fragment reassembly not implemented |
 | IPv6 Path MTU Discovery | RFC 8201 | 🟡 | `ipv6/icmpv6`, `x/xnet` | — | Packet Too Big MTU reports and learned route MTU selection; aging not implemented |
 | IPv6 Router Advertisement DNS Options | RFC 8106 | ✅ | `ipv6/icmpv6`, `x/xnet` | — | RDNSS/DNSSL option parsing with explicit and passive RA DNS state |
-| IPv6 Privacy Extensions | RFC 8981 | ❌ | — | — | Not implemented |
+| IPv6 Privacy Extensions | RFC 8981 | 🟡 | `ipv6` | — | Temporary SLAAC address generation helper; address lifecycle not implemented |
 | MLDv2 | RFC 3810 | ❌ | — | — | Not implemented |
 | IPv6 Node Requirements | RFC 8504 | ❌ | — | — | Not implemented as a conformance checklist |
 | DHCPv6 DNS Configuration | RFC 3646 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | Recursive DNS server and domain search options parsed and exposed |
