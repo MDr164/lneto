@@ -25,6 +25,12 @@ type ClientConfig struct {
 	NDPCache int
 }
 
+// PacketTooBigReport describes the last received ICMPv6 Packet Too Big report.
+type PacketTooBigReport struct {
+	Source [16]byte
+	MTU    uint32
+}
+
 type Client struct {
 	connid uint64
 	magic  uint32
@@ -53,6 +59,9 @@ type Client struct {
 	onresolve func(mac [6]byte, addr [16]byte)
 	ourMAC    [6]byte
 	ourIP     [16]byte
+
+	packetTooBig   PacketTooBigReport
+	packetTooBigOK bool
 }
 
 func (client *Client) Configure(cfg ClientConfig) error {
@@ -95,6 +104,7 @@ func (client *Client) Reset() {
 	client.outgoingEcho = client.outgoingEcho[:0]
 	client.responseRing.Reset()
 	client.ndpCache.reset(0)
+	client.packetTooBigOK = false
 }
 
 func (client *Client) Demux(carrierData []byte, frameOffset int) error {
@@ -119,9 +129,22 @@ func (client *Client) Demux(carrierData []byte, frameOffset int) error {
 		return client.demuxEcho(carrierData, frameOffset)
 	case TypeNeighborSolicitation, TypeNeighborAdvertisement:
 		return client.demuxNDP(carrierData, frameOffset)
+	case TypePacketTooBig:
+		frm := FramePacketTooBig{Frame: ifrm}
+		client.packetTooBig = PacketTooBigReport{MTU: frm.MTU()}
+		if ipEnabled {
+			copy(client.packetTooBig.Source[:], carrierData[8:24])
+		}
+		client.packetTooBigOK = true
+		return nil
 	default:
 		return lneto.ErrPacketDrop
 	}
+}
+
+// LastPacketTooBig returns the last received ICMPv6 Packet Too Big report.
+func (client *Client) LastPacketTooBig() (report PacketTooBigReport, ok bool) {
+	return client.packetTooBig, client.packetTooBigOK
 }
 
 func (client *Client) Encapsulate(carrierData []byte, ipOffset, frameOffset int) (int, error) {

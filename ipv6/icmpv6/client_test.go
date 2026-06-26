@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/soypat/lneto"
 	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/internal"
 )
@@ -116,6 +117,44 @@ func TestRouterAdvertisementDNSOptions(t *testing.T) {
 	}
 	if !gotDomains[0].EqualString("example.com") || !gotDomains[1].EqualString("corp.example.com") {
 		t.Fatalf("DNSSL domains=%q %q", gotDomains[0].String(), gotDomains[1].String())
+	}
+}
+
+func TestClientPacketTooBig(t *testing.T) {
+	const frameOffset = 40
+	src := netip.MustParseAddr("2001:db8::1").As16()
+	dst := netip.MustParseAddr("2001:db8::2").As16()
+	var buf [frameOffset + sizeHeader]byte
+	copy(buf[8:24], src[:])
+	copy(buf[24:40], dst[:])
+	frm, err := NewFrame(buf[frameOffset:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	frm.SetType(TypePacketTooBig)
+	ptb := FramePacketTooBig{Frame: frm}
+	ptb.SetMTU(1280)
+	frm.SetCRC(0)
+	var crc lneto.CRC791
+	crc.WriteEven(buf[8:40])
+	crc.AddUint32(sizeHeader)
+	crc.AddUint32(uint32(lneto.IPProtoIPv6ICMP))
+	frm.SetCRC(crc.PayloadSum16(buf[frameOffset:]))
+
+	var client Client
+	if err := client.Demux(buf[:], frameOffset); err != nil {
+		t.Fatal(err)
+	}
+	report, ok := client.LastPacketTooBig()
+	if !ok {
+		t.Fatal("LastPacketTooBig ok=false, want true")
+	}
+	if report.Source != src || report.MTU != 1280 {
+		t.Fatalf("LastPacketTooBig = %+v, want source %v mtu 1280", report, src)
+	}
+	client.Reset()
+	if _, ok := client.LastPacketTooBig(); ok {
+		t.Fatal("LastPacketTooBig after Reset ok=true, want false")
 	}
 }
 
