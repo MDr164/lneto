@@ -6,6 +6,7 @@ import (
 	"net/netip"
 
 	"github.com/soypat/lneto"
+	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/internal"
 )
 
@@ -39,6 +40,9 @@ type Client struct {
 	// dns accumulates DNS recursive name server addresses (OptDNSServers).
 	// Client owns the backing array; cleared on reset, capacity reused.
 	dns []netip.Addr
+	// domainSearch accumulates DNS domain search names (OptDomainList).
+	// Client owns the backing array; cleared on reset, capacity reused.
+	domainSearch []dns.Name
 	// ntps accumulates NTP server addresses (OptNTPServer, suboption 1).
 	// Client owns the backing array; cleared on reset, capacity reused.
 	ntps []netip.Addr
@@ -86,14 +90,15 @@ func (c *Client) Reset() { c.reset() }
 // connection ID is incremented to invalidate any existing stack registrations.
 func (c *Client) reset() {
 	*c = Client{
-		connID:     c.connID + 1,
-		xid:        c.xid,
-		clientMAC:  c.clientMAC,
-		iaid:       c.iaid,
-		duid:       c.duid,
-		serverDUID: c.serverDUID[:0],
-		dns:        c.dns[:0],
-		ntps:       c.ntps[:0],
+		connID:       c.connID + 1,
+		xid:          c.xid,
+		clientMAC:    c.clientMAC,
+		iaid:         c.iaid,
+		duid:         c.duid,
+		serverDUID:   c.serverDUID[:0],
+		dns:          c.dns[:0],
+		domainSearch: c.domainSearch[:0],
+		ntps:         c.ntps[:0],
 	}
 }
 
@@ -235,6 +240,8 @@ func (c *Client) setOptions(frm Frame) error {
 			for i := 0; i+16 <= len(data); i += 16 {
 				c.dns = append(c.dns, netip.AddrFrom16([16]byte(data[i:i+16])))
 			}
+		case OptDomainList:
+			c.parseDomainSearch(data)
 		case OptNTPServer:
 			c.parseNTPServer(data)
 		}
@@ -256,6 +263,27 @@ func (c *Client) parseNTPServer(data []byte) {
 			c.ntps = append(c.ntps, netip.AddrFrom16([16]byte(data[ptr+4:ptr+20])))
 		}
 		ptr += 4 + subLen
+	}
+}
+
+func (c *Client) parseDomainSearch(data []byte) {
+	if len(c.domainSearch) > 0 {
+		return
+	}
+	for off := uint16(0); off < uint16(len(data)); {
+		idx := len(c.domainSearch)
+		if idx < cap(c.domainSearch) {
+			c.domainSearch = c.domainSearch[:idx+1]
+		} else {
+			c.domainSearch = append(c.domainSearch, dns.Name{})
+		}
+		next, err := c.domainSearch[idx].Decode(data, off)
+		if err != nil || next <= off {
+			c.domainSearch[idx].Reset()
+			c.domainSearch = c.domainSearch[:idx]
+			return
+		}
+		off = next
 	}
 }
 
@@ -319,6 +347,12 @@ func (c *Client) AppendDNSServers(dst []netip.Addr) []netip.Addr { return append
 
 // NumDNSServers returns the number of DNS server addresses received.
 func (c *Client) NumDNSServers() int { return len(c.dns) }
+
+// AppendDomainSearch appends the DNS domain search names received from the server to dst.
+func (c *Client) AppendDomainSearch(dst []dns.Name) []dns.Name { return append(dst, c.domainSearch...) }
+
+// NumDomainSearch returns the number of DNS domain search names received.
+func (c *Client) NumDomainSearch() int { return len(c.domainSearch) }
 
 // AppendNTPServers appends the NTP server addresses received from the server to dst.
 func (c *Client) AppendNTPServers(dst []netip.Addr) []netip.Addr { return append(dst, c.ntps...) }

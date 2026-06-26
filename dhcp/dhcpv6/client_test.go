@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"net/netip"
 	"testing"
+
+	"github.com/soypat/lneto/dns"
 )
 
 // writeOpt6 encodes a single DHCPv6 option into dst using the 4-byte TLV header
@@ -203,6 +205,46 @@ func TestClientParsesNTPServerOption(t *testing.T) {
 	}
 }
 
+func TestClientParsesDomainSearchOption(t *testing.T) {
+	const xid = 0x203040
+	clientMAC := [6]byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	serverDUID := []byte{0, 3, 0, 1, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	assignedAddr := [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	iaid := [4]byte{clientMAC[0], clientMAC[1], clientMAC[2], clientMAC[3]}
+
+	var cl Client
+	if err := cl.BeginRequest(xid, RequestConfig{ClientHardwareAddr: clientMAC}); err != nil {
+		t.Fatal("BeginRequest:", err)
+	}
+	var buf [1024]byte
+	if _, err := cl.Encapsulate(buf[:], -1, 0); err != nil {
+		t.Fatal("Encapsulate (Solicit):", err)
+	}
+	advFrame := buildServerFrame(MsgAdvertise, xid, serverDUID, iaid, assignedAddr)
+	if err := cl.Demux(advFrame, 0); err != nil {
+		t.Fatal("Demux (Advertise):", err)
+	}
+	if _, err := cl.Encapsulate(buf[:], -1, 0); err != nil {
+		t.Fatal("Encapsulate (Request):", err)
+	}
+
+	replyFrame := appendDomainSearchOption(t, buildServerFrame(MsgReply, xid, serverDUID, iaid, assignedAddr), "example.com", "corp.example.com")
+	if err := cl.Demux(replyFrame, 0); err != nil {
+		t.Fatal("Demux (Reply):", err)
+	}
+	var domains []dns.Name
+	domains = cl.AppendDomainSearch(domains)
+	if len(domains) != 2 {
+		t.Fatalf("AppendDomainSearch len = %d, want 2", len(domains))
+	}
+	if !domains[0].EqualString("example.com") || !domains[1].EqualString("corp.example.com") {
+		t.Fatalf("AppendDomainSearch = %q, %q", domains[0].String(), domains[1].String())
+	}
+	if n := cl.NumDomainSearch(); n != 2 {
+		t.Fatalf("NumDomainSearch = %d, want 2", n)
+	}
+}
+
 func appendNTPServerOption(frame []byte, addr [16]byte) []byte {
 	var ntpPayload [20]byte
 	binary.BigEndian.PutUint16(ntpPayload[0:2], 1)
@@ -210,6 +252,24 @@ func appendNTPServerOption(frame []byte, addr [16]byte) []byte {
 	copy(ntpPayload[4:], addr[:])
 	buf := append(frame[:len(frame):len(frame)], make([]byte, 4+len(ntpPayload))...)
 	writeOpt6(buf[len(frame):], OptNTPServer, ntpPayload[:]...)
+	return buf
+}
+
+func appendDomainSearchOption(t testing.TB, frame []byte, domains ...string) []byte {
+	t.Helper()
+	var payload []byte
+	for _, domain := range domains {
+		name, err := dns.NewName(domain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err = name.AppendTo(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	buf := append(frame[:len(frame):len(frame)], make([]byte, 4+len(payload))...)
+	writeOpt6(buf[len(frame):], OptDomainList, payload...)
 	return buf
 }
 

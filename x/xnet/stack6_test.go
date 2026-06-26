@@ -8,6 +8,7 @@ import (
 
 	"github.com/soypat/lneto"
 	"github.com/soypat/lneto/dhcp/dhcpv6"
+	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/internet"
 	"github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/udp"
@@ -122,6 +123,7 @@ type dhcpv6ServerTestNode struct {
 	requestSeen  bool
 	assignedAddr [16]byte
 	dnsServer    [16]byte
+	domainSearch []byte
 	ntpServer    [16]byte
 	clientIAID   [4]byte
 }
@@ -134,7 +136,7 @@ func (sv *dhcpv6ServerTestNode) Encapsulate(carrierData []byte, _, offsetToFrame
 	if sv.requestSeen {
 		msg = dhcpv6.MsgReply
 	}
-	n := appendDHCPv6ServerFrame(carrierData[offsetToFrame:], msg, sv.xid, sv.clientIAID, sv.assignedAddr, sv.dnsServer, sv.ntpServer)
+	n := appendDHCPv6ServerFrame(carrierData[offsetToFrame:], msg, sv.xid, sv.clientIAID, sv.assignedAddr, sv.dnsServer, sv.domainSearch, sv.ntpServer)
 	if sv.requestSeen {
 		sv.xid = 0
 	}
@@ -165,7 +167,7 @@ func (sv *dhcpv6ServerTestNode) ConnectionID() *uint64 {
 	return &sv.connID
 }
 
-func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4]byte, assigned, dns, ntp [16]byte) int {
+func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4]byte, assigned, dnssv [16]byte, domainSearch []byte, ntp [16]byte) int {
 	dst[0] = byte(msg)
 	dst[1] = byte(xid >> 16)
 	dst[2] = byte(xid >> 8)
@@ -184,7 +186,10 @@ func appendDHCPv6ServerFrame(dst []byte, msg dhcpv6.MsgType, xid uint32, iaid [4
 	binary.BigEndian.PutUint32(iana[8:12], 1800)
 	copy(iana[12:], iaaddr[:])
 	n += writeDHCPv6Opt(dst[n:], dhcpv6.OptIANA, iana[:])
-	n += writeDHCPv6Opt(dst[n:], dhcpv6.OptDNSServers, dns[:])
+	n += writeDHCPv6Opt(dst[n:], dhcpv6.OptDNSServers, dnssv[:])
+	if len(domainSearch) > 0 {
+		n += writeDHCPv6Opt(dst[n:], dhcpv6.OptDomainList, domainSearch)
+	}
 	if ntp != ([16]byte{}) {
 		var ntpPayload [20]byte
 		binary.BigEndian.PutUint16(ntpPayload[0:2], 1)
@@ -365,9 +370,10 @@ func TestStack6DHCPv6Request(t *testing.T) {
 	const rngseed = 12345
 	client, server := newStack6Pair(t, rngseed, 0, 0)
 	assigned := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10}
-	dns := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 53}
+	dnssv := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 53}
 	ntp := [16]byte{0xfd, 0, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 123}
-	sv := &dhcpv6ServerTestNode{assignedAddr: assigned, dnsServer: dns, ntpServer: ntp}
+	domainSearch := appendDomainSearchList6(t, "example.com", "corp.example.com")
+	sv := &dhcpv6ServerTestNode{assignedAddr: assigned, dnsServer: dnssv, domainSearch: domainSearch, ntpServer: ntp}
 	var svUDP internet.StackUDPPort
 	svUDP.SetStackNode(sv, nil, dhcpv6.ClientPort)
 	if err := server.(*stack6).udps6.RegisterMACFiltered(&svUDP, nil); err != nil {
@@ -396,12 +402,31 @@ func TestStack6DHCPv6Request(t *testing.T) {
 	if got.TRenewal != 900 || got.TRebind != 1800 || got.TPreferred != 1800 || got.TValid != 3600 {
 		t.Errorf("timers = renewal:%d rebind:%d preferred:%d valid:%d", got.TRenewal, got.TRebind, got.TPreferred, got.TValid)
 	}
-	if len(got.DNSServers) != 1 || got.DNSServers[0] != netip.AddrFrom16(dns) {
-		t.Errorf("DNSServers = %v, want %v", got.DNSServers, netip.AddrFrom16(dns))
+	if len(got.DNSServers) != 1 || got.DNSServers[0] != netip.AddrFrom16(dnssv) {
+		t.Errorf("DNSServers = %v, want %v", got.DNSServers, netip.AddrFrom16(dnssv))
+	}
+	if len(got.DomainSearch) != 2 || !got.DomainSearch[0].EqualString("example.com") || !got.DomainSearch[1].EqualString("corp.example.com") {
+		t.Errorf("DomainSearch = %v", got.DomainSearch)
 	}
 	if len(got.NTPServers) != 1 || got.NTPServers[0] != netip.AddrFrom16(ntp) {
 		t.Errorf("NTPServers = %v, want %v", got.NTPServers, netip.AddrFrom16(ntp))
 	}
+}
+
+func appendDomainSearchList6(t testing.TB, domains ...string) []byte {
+	t.Helper()
+	var payload []byte
+	for _, domain := range domains {
+		name, err := dns.NewName(domain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err = name.AppendTo(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return payload
 }
 
 // TestStack6ICMPv6_PingEcho verifies a full ICMPv6 echo request/reply exchange.

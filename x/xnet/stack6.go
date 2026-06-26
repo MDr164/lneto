@@ -6,6 +6,7 @@ import (
 
 	"github.com/soypat/lneto"
 	"github.com/soypat/lneto/dhcp/dhcpv6"
+	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/internal"
 	"github.com/soypat/lneto/internet"
 	"github.com/soypat/lneto/ipv6/icmpv6"
@@ -41,6 +42,7 @@ type Stack6 interface {
 // DHCPResultsV6 contains the result of a completed DHCPv6 address request.
 type DHCPResultsV6 struct {
 	DNSServers    []netip.Addr
+	DomainSearch  []dns.Name
 	NTPServers    []netip.Addr
 	AssignedAddr6 [16]byte
 	TRebind       uint32
@@ -194,9 +196,11 @@ func (s *stack6) ResultDHCPv6() (*DHCPResultsV6, error) {
 		TPreferred:    s.dhcp6.PreferredLifetimeSeconds(),
 		TValid:        s.dhcp6.ValidLifetimeSeconds(),
 		DNSServers:    s.dhcp6res.DNSServers[:0],
+		DomainSearch:  s.dhcp6res.DomainSearch[:0],
 		NTPServers:    s.dhcp6res.NTPServers[:0],
 	}
 	s.dhcp6res.DNSServers = s.dhcp6.AppendDNSServers(s.dhcp6res.DNSServers)
+	s.dhcp6res.DomainSearch = s.dhcp6.AppendDomainSearch(s.dhcp6res.DomainSearch)
 	s.dhcp6res.NTPServers = s.dhcp6.AppendNTPServers(s.dhcp6res.NTPServers)
 	return &s.dhcp6res, nil
 }
