@@ -27,8 +27,10 @@ type ClientConfig struct {
 
 // PacketTooBigReport describes the last received ICMPv6 Packet Too Big report.
 type PacketTooBigReport struct {
-	Source [16]byte
-	MTU    uint32
+	Source         [16]byte
+	Destination    [16]byte
+	MTU            uint32
+	HasDestination bool
 }
 
 // RouterAdvertisementReport describes the last received ICMPv6 Router Advertisement.
@@ -65,6 +67,7 @@ type Client struct {
 	ndpCache  ndpCache
 	onresolve func(mac [6]byte, addr [16]byte)
 	onRA      func(options []byte) error
+	onPTB     func(PacketTooBigReport)
 	ourMAC    [6]byte
 	ourIP     [16]byte
 
@@ -163,7 +166,14 @@ func (client *Client) Demux(carrierData []byte, frameOffset int) error {
 		if ipEnabled {
 			copy(client.packetTooBig.Source[:], carrierData[8:24])
 		}
+		if len(rawdata) >= sizeHeader+8 {
+			copy(client.packetTooBig.Destination[:], rawdata[32:48])
+			client.packetTooBig.HasDestination = true
+		}
 		client.packetTooBigOK = true
+		if client.onPTB != nil {
+			client.onPTB(client.packetTooBig)
+		}
 		return nil
 	default:
 		return lneto.ErrPacketDrop
@@ -216,6 +226,11 @@ func (client *Client) SetNDPResolveCallback(cb func(mac [6]byte, addr [16]byte))
 // Advertisement options. The options slice is only valid during the callback.
 func (client *Client) SetRouterAdvertisementCallback(cb func(options []byte) error) {
 	client.onRA = cb
+}
+
+// SetPacketTooBigCallback sets the callback called for received Packet Too Big reports.
+func (client *Client) SetPacketTooBigCallback(cb func(PacketTooBigReport)) {
+	client.onPTB = cb
 }
 
 func (client *Client) NDPStartQuery(addr [16]byte, triggerCallback bool) error {

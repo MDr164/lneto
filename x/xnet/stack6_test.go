@@ -419,6 +419,68 @@ func TestStack6IngressRouterAdvertisementSLAAC(t *testing.T) {
 	}
 }
 
+func TestStack6PacketTooBigRouteMTU(t *testing.T) {
+	const mtu = 1280
+	cfg := StackConfig{
+		Hostname:        "pmtu-1",
+		RandSeed:        1,
+		HardwareAddress: [6]byte{1, 2, 3, 4, 5, 6},
+		StaticAddress6:  netip.MustParseAddr("2001:db8::1").As16(),
+		ICMPQueueLimit:  1,
+	}
+	s := DefaultStack6()
+	if err := s.Reset6(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnableICMP6(true); err != nil {
+		t.Fatal(err)
+	}
+	dst := netip.MustParseAddr("2001:db8::99").As16()
+	buf := makePacketTooBigIPv6(t, cfg.StaticAddress6, dst, mtu)
+	if err := s.IngressIPv6(buf); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.RouteMTU6(dst)
+	if !ok || got != mtu {
+		t.Fatalf("RouteMTU6 = %d, %v, want %d, true", got, ok, mtu)
+	}
+}
+
+func makePacketTooBigIPv6(t testing.TB, ourAddr, invokedDst [16]byte, mtu uint32) []byte {
+	t.Helper()
+	const invokedHeaderLen = 40
+	buf := make([]byte, ipv6HeaderSize+8+invokedHeaderLen)
+	ifrm, err := ipv6.NewFrame(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ifrm.SetVersionTrafficAndFlow(6, 0, 0)
+	ifrm.SetPayloadLength(uint16(len(buf) - ipv6HeaderSize))
+	ifrm.SetNextHeader(lneto.IPProtoIPv6ICMP)
+	ifrm.SetHopLimit(255)
+	*ifrm.SourceAddr() = netip.MustParseAddr("fe80::1").As16()
+	*ifrm.DestinationAddr() = ourAddr
+	icmp, err := icmpv6.NewFrame(buf[ipv6HeaderSize:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	icmp.SetType(icmpv6.TypePacketTooBig)
+	ptb := icmpv6.FramePacketTooBig{Frame: icmp}
+	ptb.SetMTU(mtu)
+	invoked, err := ipv6.NewFrame(buf[ipv6HeaderSize+8:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	invoked.SetVersionTrafficAndFlow(6, 0, 0)
+	*invoked.SourceAddr() = ourAddr
+	*invoked.DestinationAddr() = invokedDst
+	icmp.SetCRC(0)
+	var crc lneto.CRC791
+	ifrm.CRCWritePseudo(&crc)
+	icmp.SetCRC(crc.PayloadSum16(buf[ipv6HeaderSize:]))
+	return buf
+}
+
 func makeRouterAdvertisementPrefixOption(prefix netip.Prefix, valid, preferred uint32, autonomous bool) [32]byte {
 	var buf [32]byte
 	buf[0] = icmpv6.OptPrefixInformation

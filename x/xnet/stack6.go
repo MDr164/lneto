@@ -34,6 +34,7 @@ type Stack6 interface {
 	RegisterListenerUDP6(pktconn *udp.PacketConn) error
 	RegisterUDPNode6(port *internet.StackUDPPort, node lneto.StackNode, raddr [16]byte, rport uint16) error
 	ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok bool, err error)
+	RouteMTU6(addr [16]byte) (mtu uint32, ok bool)
 	StartDHCPv6Request() error
 	ResultDHCPv6() (*DHCPResultsV6, error)
 	IngressIPv6(ipframe []byte) error
@@ -75,6 +76,11 @@ type stack6 struct {
 	ndpPending []struct {
 		addr   [16]byte
 		macBuf []byte
+	}
+	pathMTU struct {
+		addr [16]byte
+		mtu  uint32
+		ok   bool
 	}
 }
 
@@ -133,6 +139,7 @@ func (s *stack6) Reset6(cfg *StackConfig) error {
 		}
 		s.icmp6.SetNDPResolveCallback(s.macResolve)
 		s.icmp6.SetRouterAdvertisementCallback(s.applyRouterAdvertisement6)
+		s.icmp6.SetPacketTooBigCallback(s.setPathMTU6)
 		ndpSlots := int(cfg.MaxActiveTCPPorts) + int(cfg.MaxActiveUDPPorts)
 		internal.SliceReuse(&s.ndpPending, ndpSlots)
 		s.ndpPending = s.ndpPending[:cap(s.ndpPending)] // all slots available for scan
@@ -199,6 +206,22 @@ func (s *stack6) ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok 
 func (s *stack6) applyRouterAdvertisement6(options []byte) error {
 	_, _, err := s.ApplyRouterAdvertisement6(options)
 	return err
+}
+
+func (s *stack6) setPathMTU6(report icmpv6.PacketTooBigReport) {
+	if report.HasDestination && report.MTU != 0 {
+		s.pathMTU.addr = report.Destination
+		s.pathMTU.mtu = report.MTU
+		s.pathMTU.ok = true
+	}
+}
+
+// RouteMTU6 returns the learned IPv6 path MTU for addr.
+func (s *stack6) RouteMTU6(addr [16]byte) (mtu uint32, ok bool) {
+	if s.pathMTU.ok && s.pathMTU.addr == addr {
+		return s.pathMTU.mtu, true
+	}
+	return 0, false
 }
 
 func (s *stack6) StartDHCPv6Request() error {

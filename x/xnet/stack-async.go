@@ -829,6 +829,16 @@ func (s *StackAsync) AppendDNSSearch(dst []dns.Name) []dns.Name {
 	return append(dst, s.dnsSearch...)
 }
 
+// RouteMTU6 returns the learned IPv6 path MTU for addr.
+func (s *StackAsync) RouteMTU6(addr [16]byte) (mtu uint32, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ipv6enabled {
+		return 0, false
+	}
+	return s.stack6.RouteMTU6(addr)
+}
+
 func firstRDNSSServer(option []byte) (lifetime uint32, server netip.Addr, ok bool) {
 	if len(option) < 24 || option[0] != icmpv6.OptRecursiveDNSServer {
 		return 0, netip.Addr{}, false
