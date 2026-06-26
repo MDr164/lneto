@@ -26,6 +26,14 @@ type SourceCandidate struct {
 	Temporary  bool
 }
 
+// DestinationCandidate describes a candidate destination address and the source
+// address selected for reaching it.
+type DestinationCandidate struct {
+	Addr     [16]byte
+	Source   SourceCandidate
+	SourceOK bool
+}
+
 // Scope identifies an IPv6 address scope from RFC 4007.
 type Scope uint8
 
@@ -105,6 +113,56 @@ func SelectSourceAddr(candidates []SourceCandidate, dst [16]byte) (idx int, ok b
 	return best, true
 }
 
+// SortDestinationAddrs orders candidates in-place using RFC 6724 destination
+// address selection rules that are meaningful without route probing state.
+func SortDestinationAddrs(candidates []DestinationCandidate) {
+	for i := 1; i < len(candidates); i++ {
+		c := candidates[i]
+		j := i - 1
+		for ; j >= 0 && preferDestination(c, candidates[j]); j-- {
+			candidates[j+1] = candidates[j]
+		}
+		candidates[j+1] = c
+	}
+}
+
+func preferDestination(a, b DestinationCandidate) bool {
+	aUsable := a.SourceOK && AddrScope(a.Source.Addr) >= AddrScope(a.Addr)
+	bUsable := b.SourceOK && AddrScope(b.Source.Addr) >= AddrScope(b.Addr)
+	if aUsable != bUsable {
+		return aUsable
+	}
+	aMatchScope := a.SourceOK && AddrScope(a.Source.Addr) == AddrScope(a.Addr)
+	bMatchScope := b.SourceOK && AddrScope(b.Source.Addr) == AddrScope(b.Addr)
+	if aMatchScope != bMatchScope {
+		return aMatchScope
+	}
+	aDeprecated := a.SourceOK && a.Source.Deprecated
+	bDeprecated := b.SourceOK && b.Source.Deprecated
+	if aDeprecated != bDeprecated {
+		return !aDeprecated
+	}
+	aLabel := !a.SourceOK || addrLabel(a.Source.Addr) == addrLabel(a.Addr)
+	bLabel := !b.SourceOK || addrLabel(b.Source.Addr) == addrLabel(b.Addr)
+	if aLabel != bLabel {
+		return aLabel
+	}
+	aPrec := addrPrecedence(a.Addr)
+	bPrec := addrPrecedence(b.Addr)
+	if aPrec != bPrec {
+		return aPrec > bPrec
+	}
+	aScope := AddrScope(a.Addr)
+	bScope := AddrScope(b.Addr)
+	if aScope != bScope {
+		return aScope < bScope
+	}
+	if a.SourceOK && b.SourceOK {
+		return commonPrefixLen(a.Source.Addr, a.Addr) > commonPrefixLen(b.Source.Addr, b.Addr)
+	}
+	return false
+}
+
 func preferSource(a, b SourceCandidate, dst [16]byte) bool {
 	if a.Addr == dst && b.Addr != dst {
 		return true
@@ -131,6 +189,23 @@ func preferSource(a, b SourceCandidate, dst [16]byte) bool {
 		return !a.Temporary
 	}
 	return commonPrefixLen(a.Addr, dst) > commonPrefixLen(b.Addr, dst)
+}
+
+func addrPrecedence(addr [16]byte) uint8 {
+	switch {
+	case addr == ([16]byte{15: 1}):
+		return 50
+	case isIPv4Mapped(addr):
+		return 35
+	case addr[0] == 0x20 && addr[1] == 0x02:
+		return 30
+	case addr[0] == 0x20 && addr[1] == 0x01 && addr[2] == 0 && addr[3] == 0:
+		return 5
+	case addr[0] == 0xfc || addr[0] == 0xfd:
+		return 3
+	default:
+		return 40
+	}
 }
 
 func addrLabel(addr [16]byte) uint8 {

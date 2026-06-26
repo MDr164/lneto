@@ -141,6 +141,65 @@ func TestSelectSourceAddrRules(t *testing.T) {
 	}
 }
 
+func TestSortDestinationAddrs(t *testing.T) {
+	globalSrc := SourceCandidate{Addr: netip.MustParseAddr("2001:db8:1::1").As16()}
+	ulaSrc := SourceCandidate{Addr: netip.MustParseAddr("fd00::1").As16()}
+	linkSrc := SourceCandidate{Addr: netip.MustParseAddr("fe80::1").As16()}
+	tests := []struct {
+		name       string
+		candidates []DestinationCandidate
+		want       string
+	}{
+		{
+			name: "avoid unusable",
+			candidates: []DestinationCandidate{
+				{Addr: netip.MustParseAddr("2001:db8::99").As16(), Source: linkSrc, SourceOK: true},
+				{Addr: netip.MustParseAddr("2001:db8::88").As16(), Source: globalSrc, SourceOK: true},
+			},
+			want: "2001:db8::88",
+		},
+		{
+			name: "matching label",
+			candidates: []DestinationCandidate{
+				{Addr: netip.MustParseAddr("2001:db8::99").As16(), Source: ulaSrc, SourceOK: true},
+				{Addr: netip.MustParseAddr("fd00::99").As16(), Source: ulaSrc, SourceOK: true},
+			},
+			want: "fd00::99",
+		},
+		{
+			name: "higher precedence",
+			candidates: []DestinationCandidate{
+				{Addr: netip.MustParseAddr("2002::1").As16(), Source: globalSrc, SourceOK: true},
+				{Addr: netip.MustParseAddr("2001:db8::1").As16(), Source: globalSrc, SourceOK: true},
+			},
+			want: "2001:db8::1",
+		},
+		{
+			name: "smaller scope",
+			candidates: []DestinationCandidate{
+				{Addr: netip.MustParseAddr("2001:db8::99").As16(), Source: globalSrc, SourceOK: true},
+				{Addr: netip.MustParseAddr("fe80::99").As16(), Source: linkSrc, SourceOK: true},
+			},
+			want: "fe80::99",
+		},
+		{
+			name: "longest prefix",
+			candidates: []DestinationCandidate{
+				{Addr: netip.MustParseAddr("2001:db8:2::99").As16(), Source: globalSrc, SourceOK: true},
+				{Addr: netip.MustParseAddr("2001:db8:1::99").As16(), Source: globalSrc, SourceOK: true},
+			},
+			want: "2001:db8:1::99",
+		},
+	}
+	for _, tc := range tests {
+		SortDestinationAddrs(tc.candidates)
+		got := netip.AddrFrom16(tc.candidates[0].Addr).String()
+		if got != tc.want {
+			t.Errorf("%s: first destination = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestSLAACAddrFromMAC(t *testing.T) {
 	addr, ok := SLAACAddrFromMAC(netip.MustParsePrefix("2001:db8:1:2::/64"), [6]byte{0x00, 0x25, 0x96, 0x12, 0x34, 0x56})
 	if !ok {
