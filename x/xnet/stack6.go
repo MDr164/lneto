@@ -30,6 +30,7 @@ type Stack6 interface {
 	DialTCP6(conn *tcp.Conn, localPort uint16, raddr [16]byte, rport uint16, iss tcp.Value) error
 	RegisterListenerTCP6(listener *tcp.Listener) error
 	RegisterListenerUDP6(pktconn *udp.PacketConn) error
+	RegisterUDPNode6(port *internet.StackUDPPort, node lneto.StackNode, raddr [16]byte, rport uint16) error
 	StartDHCPv6Request() error
 	ResultDHCPv6() (*DHCPResultsV6, error)
 	IngressIPv6(ipframe []byte) error
@@ -155,6 +156,11 @@ func (s *stack6) RegisterListenerUDP6(pktconn *udp.PacketConn) error {
 	return s.udps6.RegisterMACFiltered(pktconn, nil)
 }
 
+func (s *stack6) RegisterUDPNode6(port *internet.StackUDPPort, node lneto.StackNode, raddr [16]byte, rport uint16) error {
+	port.SetStackNode(node, raddr[:], rport)
+	return s.udps6.RegisterMACFiltered(port, nil)
+}
+
 func (s *stack6) StartDHCPv6Request() error {
 	s.dhcp6.Reset()
 	s.rand = internal.Prand32(s.rand)
@@ -169,8 +175,7 @@ func (s *stack6) StartDHCPv6Request() error {
 		return err
 	}
 	mcast := [16]byte{0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0, 0x02}
-	s.dhcpUDP6.SetStackNode(&s.dhcp6, mcast[:], dhcpv6.ServerPort)
-	return s.udps6.RegisterMACFiltered(&s.dhcpUDP6, nil)
+	return s.RegisterUDPNode6(&s.dhcpUDP6, &s.dhcp6, mcast, dhcpv6.ServerPort)
 }
 
 func (s *stack6) ResultDHCPv6() (*DHCPResultsV6, error) {

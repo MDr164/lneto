@@ -48,6 +48,7 @@ type StackAsync struct {
 	arpt        subnetTable
 
 	dnsUDP  internet.StackUDPPort
+	dnsUDP6 internet.StackUDPPort
 	dns     dns.Client
 	ednsopt dns.Resource
 	lookup  dns.Message
@@ -576,23 +577,21 @@ func (s *StackAsync) RegisterListenerUDP6(pktconn *udp.PacketConn) (err error) {
 
 var errNoDNSServer = errors.New("no DNS server- did DHCP complete? You can set a predetermined DNS server in Stack configuration")
 
-var errDNSv6Transport = errors.New("DNS query over IPv6 transport not supported; configure an IPv4 DNS server")
-
 func (s *StackAsync) StartLookupIP(host string) error {
 	return s.StartLookupIPType(host, dns.TypeA)
 }
 
 // StartLookupIPType begins resolving host for the given record type (e.g. dns.TypeA
-// or dns.TypeAAAA). The DNS query is always carried over IPv4 to the configured DNS
-// server; resolving over an IPv6 DNS transport is not yet supported.
+// or dns.TypeAAAA). The DNS query is carried over IPv4 or IPv6 depending on the
+// configured DNS server address.
 func (s *StackAsync) StartLookupIPType(host string, qtype dns.Type) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.dnssv.IsValid() {
 		return errNoDNSServer
 	}
-	if !s.dnssv.Is4() {
-		return errDNSv6Transport
+	if s.dnssv.Is6() && !s.ipv6enabled {
+		return lneto.ErrUnsupported
 	}
 	name, err := dns.NewName(host)
 	if err != nil {
@@ -619,10 +618,12 @@ func (s *StackAsync) StartLookupIPType(host string, qtype dns.Type) error {
 	if err != nil {
 		return err
 	}
-	*(*[4]byte)(s.addrBuf[:4]) = s.dnssv.As4()
-	s.dnsUDP.SetStackNode(&s.dns, s.addrBuf[:4], dns.ServerPort)
-	err = s.udps.RegisterMACFiltered(&s.dnsUDP, nil)
-	return err
+	if s.dnssv.Is4() {
+		*(*[4]byte)(s.addrBuf[:4]) = s.dnssv.As4()
+		s.dnsUDP.SetStackNode(&s.dns, s.addrBuf[:4], dns.ServerPort)
+		return s.udps.RegisterMACFiltered(&s.dnsUDP, nil)
+	}
+	return s.stack6.RegisterUDPNode6(&s.dnsUDP6, &s.dns, s.dnssv.As16(), dns.ServerPort)
 }
 
 var (

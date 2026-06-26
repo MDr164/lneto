@@ -10,6 +10,7 @@ import (
 	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/ethernet"
 	"github.com/soypat/lneto/ipv4"
+	"github.com/soypat/lneto/ipv6"
 	"github.com/soypat/lneto/udp"
 )
 
@@ -94,6 +95,69 @@ func TestDNS_QueryReceivesAnswer(t *testing.T) {
 	}
 }
 
+func TestDNS_QueryReceivesAnswerIPv6Transport(t *testing.T) {
+	const seed = 9876
+	const MTU = ethernet.MaxMTU
+
+	client := new(StackAsync)
+	dnsServerAddr := netip.MustParseAddr("2001:db8::53")
+	clientAddr := netip.MustParseAddr("2001:db8::100")
+	err := client.Reset(StackConfig{
+		Hostname:        "DNSClient6",
+		RandSeed:        seed,
+		StaticAddress6:  clientAddr.As16(),
+		DNSServer:       dnsServerAddr,
+		HardwareAddress: [6]byte{0xde, 0xad, 0xbe, 0xef, 0x00, 0x06},
+		MTU:             uint16(MTU),
+		IPv6Stack:       DefaultStack6(),
+	})
+	if err != nil {
+		t.Fatal("client Reset failed:", err)
+	}
+
+	wantAddr := netip.MustParseAddr("2001:db8::1234")
+	const hostname = "example.com"
+	err = client.StartLookupIPType(hostname, dns.TypeAAAA)
+	if err != nil {
+		t.Fatal("StartLookupIPType failed:", err)
+	}
+
+	var buf [MTU]byte
+	n, err := client.EgressIP(buf[:])
+	if err != nil {
+		t.Fatal("client EgressIP failed:", err)
+	}
+	if n == 0 {
+		t.Fatal("expected DNS query packet from client")
+	}
+
+	txid, clientPort, err := extractDNSTxIDAndPort6(buf[:n])
+	if err != nil {
+		t.Fatal("failed to extract DNS txid:", err)
+	}
+
+	responsePkt, err := buildDNSResponsePacket6(t, txid, clientPort, hostname, wantAddr, dnsServerAddr, clientAddr, buf[:])
+	if err != nil {
+		t.Fatal("failed to build DNS response packet:", err)
+	}
+
+	err = client.IngressIP(responsePkt)
+	if err != nil {
+		t.Fatal("client IngressIP failed:", err)
+	}
+
+	addrs, done, err := client.ResultLookupIP(hostname)
+	if err != nil {
+		t.Fatal("ResultLookupIP error:", err)
+	}
+	if !done {
+		t.Fatal("DNS lookup not done after receiving response")
+	}
+	if !slices.Contains(addrs, wantAddr) {
+		t.Errorf("expected address %s not found in result %v", wantAddr, addrs)
+	}
+}
+
 // extractDNSTxIDAndPort extracts the DNS transaction ID and source port from an Ethernet+IP+UDP+DNS packet.
 func extractDNSTxIDAndPort(pkt []byte) (txid uint16, srcPort uint16, err error) {
 	const ethHdrLen = 14
@@ -126,6 +190,32 @@ func extractDNSTxIDAndPort(pkt []byte) (txid uint16, srcPort uint16, err error) 
 	}
 	srcPort = udpFrame.SourcePort()
 
+	dnsFrame, err := dns.NewFrame(pkt[dnsStart:])
+	if err != nil {
+		return 0, 0, err
+	}
+	return dnsFrame.TxID(), srcPort, nil
+}
+
+func extractDNSTxIDAndPort6(pkt []byte) (txid uint16, srcPort uint16, err error) {
+	const ipHdrLen = 40
+	if len(pkt) < ipHdrLen+8+dns.SizeHeader {
+		return 0, 0, errBaseLenDNS
+	}
+	ifrm, err := ipv6.NewFrame(pkt)
+	if err != nil {
+		return 0, 0, err
+	}
+	if ifrm.NextHeader() != lneto.IPProtoUDP {
+		return 0, 0, lneto.ErrInvalidField
+	}
+	udpStart := ipHdrLen
+	dnsStart := udpStart + 8
+	udpFrame, err := udp.NewFrame(pkt[udpStart:])
+	if err != nil {
+		return 0, 0, err
+	}
+	srcPort = udpFrame.SourcePort()
 	dnsFrame, err := dns.NewFrame(pkt[dnsStart:])
 	if err != nil {
 		return 0, 0, err
@@ -228,6 +318,62 @@ func buildDNSResponsePacket(t *testing.T, txid uint16, dstPort uint16, hostname 
 	crcValue = crc.PayloadSum16(udpFrame.RawData())
 	udpFrame.SetCRC(crcValue)
 
+	return pkt, nil
+}
+
+func buildDNSResponsePacket6(t *testing.T, txid uint16, dstPort uint16, hostname string, addr netip.Addr,
+	srcIP netip.Addr, dstIP netip.Addr, buf []byte) ([]byte, error) {
+	t.Helper()
+
+	name, err := dns.NewName(hostname)
+	if err != nil {
+		return nil, err
+	}
+	msg := dns.Message{
+		Questions: []dns.Question{{Name: name, Type: dns.TypeAAAA, Class: dns.ClassINET}},
+		Answers:   []dns.Resource{dns.NewResource(name, dns.TypeAAAA, dns.ClassINET, 300, addr.AsSlice())},
+	}
+	responseFlags := dns.HeaderFlags(1<<15 | 1<<8 | 1<<7)
+
+	var dnsBuf [512]byte
+	dnsPayload, err := msg.AppendTo(dnsBuf[:0], txid, responseFlags)
+	if err != nil {
+		return nil, err
+	}
+
+	const ipHdrLen = 40
+	const udpHdrLen = 8
+	totalLen := ipHdrLen + udpHdrLen + len(dnsPayload)
+	if len(buf) < totalLen {
+		return nil, errBaseLenDNS
+	}
+	pkt := buf[:totalLen]
+	ifrm, err := ipv6.NewFrame(pkt)
+	if err != nil {
+		return nil, err
+	}
+	ifrm.SetVersionTrafficAndFlow(6, 0, 0)
+	ifrm.SetPayloadLength(uint16(udpHdrLen + len(dnsPayload)))
+	ifrm.SetNextHeader(lneto.IPProtoUDP)
+	ifrm.SetHopLimit(64)
+	*ifrm.SourceAddr() = srcIP.As16()
+	*ifrm.DestinationAddr() = dstIP.As16()
+
+	udpStart := ipHdrLen
+	udpFrame, err := udp.NewFrame(pkt[udpStart:])
+	if err != nil {
+		return nil, err
+	}
+	udpFrame.SetSourcePort(dns.ServerPort)
+	udpFrame.SetDestinationPort(dstPort)
+	udpLen := udpHdrLen + len(dnsPayload)
+	udpFrame.SetLength(uint16(udpLen))
+	copy(pkt[udpStart+udpHdrLen:], dnsPayload)
+
+	var crc lneto.CRC791
+	ifrm.CRCWritePseudo(&crc)
+	udpFrame.SetCRC(0)
+	udpFrame.SetCRC(lneto.NeverZeroSum(crc.PayloadSum16(udpFrame.RawData())))
 	return pkt, nil
 }
 

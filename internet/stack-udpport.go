@@ -10,16 +10,24 @@ import (
 )
 
 type StackUDPPort struct {
-	h      node
-	vld    lneto.Validator
-	rmport uint16
-	raddr  []byte
+	h        node
+	vld      lneto.Validator
+	rmport   uint16
+	raddr    []byte
+	raddrbuf [16]byte
 }
 
 func (sudp *StackUDPPort) SetStackNode(node lneto.StackNode, raddr []byte, rmport uint16) {
-	sudp.h = nodeFromStackNode(node, node.LocalPort(), node.Protocol(), raddr)
+	sudp.raddr = sudp.raddrbuf[:0]
+	if len(raddr) > len(sudp.raddrbuf) {
+		panic("remote address too large")
+	}
+	if len(raddr) > 0 {
+		copy(sudp.raddrbuf[:], raddr)
+		sudp.raddr = sudp.raddrbuf[:len(raddr)]
+	}
+	sudp.h = nodeFromStackNode(node, node.LocalPort(), node.Protocol(), sudp.raddr)
 	sudp.rmport = rmport
-	sudp.raddr = append(sudp.raddr[:0], raddr...)
 }
 
 func (sudp *StackUDPPort) Protocol() uint64 { return uint64(lneto.IPProtoUDP) }

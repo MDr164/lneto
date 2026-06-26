@@ -99,7 +99,7 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | ICMPv4 | RFC 792 | ✅ | `ipv4/icmpv4` | — | Echo (ping) client handler |
 | UDP | RFC 768 | ✅ | `udp` | — | Handler + thread-safe `Conn` |
 | TCP | RFC 9293 | ✅ | `tcp` | 0 ²³ | Full state machine, SYN cookies, retransmit queue, `Conn`/`Listener` |
-| DNS | RFC 1035 | ✅ | `dns` | — | Client (A/AAAA query) |
+| DNS | RFC 1035 | ✅ | `dns`, `x/xnet` | — | Client (A/AAAA query) over UDP/IPv4 or UDP/IPv6 transport |
 | DHCPv4 | RFC 2131 | ✅ | `dhcp/dhcpv4` | — | Client + Server |
 | IPv4 Link-Local (APIPA) | RFC 3927 | ✅ | `ipv4/linklocal4` | 0 | Heapless claim-and-defend state machine for 169.254.x.x |
 | NTP | RFC 5905 | ✅ | `ntp` | — | Client |
@@ -109,14 +109,19 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | Ethernet PHY/MDIO | IEEE 802.3 cl.22/45 | ✅ | `phy` | — | Bare-metal PHY management via MDIO |
 | IPv6 | RFC 8200 | ✅ | `ipv6` | — | Frame parsing and stack handling |
 | IPv6 Addressing Architecture | RFC 4291 | 🟡 | `ipv6`, `x/xnet` | — | Basic 128-bit address handling; no address selection policy |
+| IPv6 Scoped Address Architecture | RFC 4007 | ❌ | — | — | Not implemented |
 | ICMPv6 | RFC 4443 | ✅ | `ipv6/icmpv6` | — | Echo+NDP frame parsing and stack handling |
 | IPv6 Neighbor Discovery | RFC 4861 | 🟡 | `ipv6/icmpv6`, `x/xnet` | — | Neighbor solicitation/advertisement cache; router discovery incomplete |
 | IPv6 SLAAC | RFC 4862 | ❌ | — | — | Not implemented |
 | IPv6 Default Address Selection | RFC 6724 | ❌ | — | — | Not implemented |
+| IPv6 Extension Header Processing | RFC 8200, RFC 7045, RFC 7112 | ❌ | — | — | Not implemented |
 | IPv6 Path MTU Discovery | RFC 8201 | ❌ | — | — | Not implemented |
 | IPv6 Router Advertisement DNS Options | RFC 8106 | ❌ | — | — | Not implemented |
 | IPv6 Privacy Extensions | RFC 8981 | ❌ | — | — | Not implemented |
 | MLDv2 | RFC 3810 | ❌ | — | — | Not implemented |
+| IPv6 Node Requirements | RFC 8504 | ❌ | — | — | Not implemented as a conformance checklist |
+| DHCPv6 DNS Configuration | RFC 3646 | 🟡 | `dhcp/dhcpv6` | — | Recursive DNS server option parsed; domain search option not exposed |
+| DHCPv6 NTP Configuration | RFC 5908 | ❌ | — | — | Option requested but not parsed or exposed |
 | DHCPv6 | RFC 8415 | 🟡 | `dhcp/dhcpv6`, `x/xnet` | — | Client IA_NA address assignment; no IA_PD, relay, reconfigure, or server |
 | TLS 1.3 | RFC 8446 | ❌ | — | — | Not implemented |
 
