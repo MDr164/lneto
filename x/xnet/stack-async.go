@@ -17,6 +17,7 @@ import (
 	"github.com/soypat/lneto/internet"
 	"github.com/soypat/lneto/ipv4"
 	"github.com/soypat/lneto/ipv4/icmpv4"
+	"github.com/soypat/lneto/ipv6/icmpv6"
 	"github.com/soypat/lneto/ntp"
 	"github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/udp"
@@ -779,16 +780,45 @@ func (s *StackAsync) ResultDHCPv6() (*DHCPResultsV6, error) {
 	return s.stack6.ResultDHCPv6()
 }
 
-// ApplyRouterAdvertisement6 applies IPv6 SLAAC state from Router Advertisement
-// options and returns the address configured from the first usable autonomous
-// /64 Prefix Information option.
+// ApplyRouterAdvertisement6 applies IPv6 SLAAC and DNS state from Router
+// Advertisement options and returns the address configured from the first
+// usable autonomous /64 Prefix Information option.
 func (s *StackAsync) ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.ipv6enabled {
 		return netip.Addr{}, false, lneto.ErrUnsupported
 	}
-	return s.stack6.ApplyRouterAdvertisement6(options)
+	addr, ok, err = s.stack6.ApplyRouterAdvertisement6(options)
+	if err != nil {
+		return netip.Addr{}, false, err
+	}
+	err = icmpv6.ForEachOption(options, func(option []byte) error {
+		if option[0] != icmpv6.OptRecursiveDNSServer {
+			return nil
+		}
+		lifetime, server, parsed := firstRDNSSServer(option)
+		if !parsed {
+			return lneto.ErrInvalidField
+		}
+		if lifetime != 0 {
+			s.dnssv = server
+		}
+		return nil
+	})
+	return addr, ok, err
+}
+
+func firstRDNSSServer(option []byte) (lifetime uint32, server netip.Addr, ok bool) {
+	if len(option) < 24 || option[0] != icmpv6.OptRecursiveDNSServer {
+		return 0, netip.Addr{}, false
+	}
+	optLen := int(option[1]) * 8
+	if optLen < 24 || optLen > len(option) || (optLen-8)%16 != 0 {
+		return 0, netip.Addr{}, false
+	}
+	lifetime = binary.BigEndian.Uint32(option[4:8])
+	return lifetime, netip.AddrFrom16([16]byte(option[8:24])), true
 }
 
 type Statistics struct {

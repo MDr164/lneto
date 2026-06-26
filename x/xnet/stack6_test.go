@@ -329,6 +329,28 @@ func TestStack6ApplyRouterAdvertisementSLAAC(t *testing.T) {
 	}
 }
 
+func TestStackAsyncApplyRouterAdvertisementRDNSS(t *testing.T) {
+	var stack StackAsync
+	if err := stack.Reset(StackConfig{
+		Hostname:          "ra-dns-1",
+		RandSeed:          1,
+		HardwareAddress:   [6]byte{1, 2, 3, 4, 5, 6},
+		IPv6Stack:         DefaultStack6(),
+		MTU:               mtu6Test,
+		MaxActiveUDPPorts: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dnssv := netip.MustParseAddr("2001:db8::53")
+	opt := makeRouterAdvertisementRDNSSOption(1200, dnssv)
+	if _, _, err := stack.ApplyRouterAdvertisement6(opt[:]); err != nil {
+		t.Fatal(err)
+	}
+	if stack.dnssv != dnssv {
+		t.Fatalf("dnssv = %v, want %v", stack.dnssv, dnssv)
+	}
+}
+
 func makeRouterAdvertisementPrefixOption(prefix netip.Prefix, valid, preferred uint32, autonomous bool) [32]byte {
 	var buf [32]byte
 	buf[0] = icmpv6.OptPrefixInformation
@@ -341,6 +363,16 @@ func makeRouterAdvertisementPrefixOption(prefix netip.Prefix, valid, preferred u
 	binary.BigEndian.PutUint32(buf[8:12], preferred)
 	addr := prefix.Addr().As16()
 	copy(buf[16:], addr[:])
+	return buf
+}
+
+func makeRouterAdvertisementRDNSSOption(lifetime uint32, addr netip.Addr) [24]byte {
+	var buf [24]byte
+	buf[0] = icmpv6.OptRecursiveDNSServer
+	buf[1] = 3
+	binary.BigEndian.PutUint32(buf[4:8], lifetime)
+	a := addr.As16()
+	copy(buf[8:], a[:])
 	return buf
 }
 
