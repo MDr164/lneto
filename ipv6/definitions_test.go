@@ -5,6 +5,43 @@ import (
 	"testing"
 )
 
+func TestAddrScope(t *testing.T) {
+	tests := []struct {
+		addr string
+		want Scope
+	}{
+		{addr: "::", want: ScopeReserved},
+		{addr: "::1", want: ScopeInterfaceLocal},
+		{addr: "fe80::1", want: ScopeLinkLocal},
+		{addr: "ff01::1", want: ScopeInterfaceLocal},
+		{addr: "ff02::1", want: ScopeLinkLocal},
+		{addr: "ff05::1", want: ScopeSiteLocal},
+		{addr: "ff0e::1", want: ScopeGlobal},
+		{addr: "2001:db8::1", want: ScopeGlobal},
+	}
+	for _, tc := range tests {
+		addr := netip.MustParseAddr(tc.addr).As16()
+		if got := AddrScope(addr); got != tc.want {
+			t.Errorf("AddrScope(%s) = %d, want %d", tc.addr, got, tc.want)
+		}
+	}
+}
+
+func TestIPv6ScopePredicates(t *testing.T) {
+	if !IsMulticast(netip.MustParseAddr("ff02::1").As16()) {
+		t.Fatal("IsMulticast(ff02::1) = false, want true")
+	}
+	if IsMulticast(netip.MustParseAddr("fe80::1").As16()) {
+		t.Fatal("IsMulticast(fe80::1) = true, want false")
+	}
+	if !IsLinkLocalUnicast(netip.MustParseAddr("fe80::1").As16()) {
+		t.Fatal("IsLinkLocalUnicast(fe80::1) = false, want true")
+	}
+	if IsLinkLocalUnicast(netip.MustParseAddr("ff02::1").As16()) {
+		t.Fatal("IsLinkLocalUnicast(ff02::1) = true, want false")
+	}
+}
+
 func TestSLAACAddrFromMAC(t *testing.T) {
 	addr, ok := SLAACAddrFromMAC(netip.MustParsePrefix("2001:db8:1:2::/64"), [6]byte{0x00, 0x25, 0x96, 0x12, 0x34, 0x56})
 	if !ok {

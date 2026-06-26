@@ -12,6 +12,43 @@ const (
 
 type ToS = ipv4.ToS
 
+// Scope identifies an IPv6 address scope from RFC 4007.
+type Scope uint8
+
+const (
+	ScopeReserved          Scope = 0x0
+	ScopeInterfaceLocal    Scope = 0x1
+	ScopeLinkLocal         Scope = 0x2
+	ScopeRealmLocal        Scope = 0x3
+	ScopeAdminLocal        Scope = 0x4
+	ScopeSiteLocal         Scope = 0x5
+	ScopeOrganizationLocal Scope = 0x8
+	ScopeGlobal            Scope = 0xe
+)
+
+// AddrScope returns the RFC 4007 scope for addr.
+func AddrScope(addr [16]byte) Scope {
+	if IsMulticast(addr) {
+		return Scope(addr[1] & 0x0f)
+	}
+	if addr == ([16]byte{}) {
+		return ScopeReserved
+	}
+	if addr == ([16]byte{15: 1}) {
+		return ScopeInterfaceLocal
+	}
+	if IsLinkLocalUnicast(addr) {
+		return ScopeLinkLocal
+	}
+	return ScopeGlobal
+}
+
+// IsMulticast reports whether addr is an IPv6 multicast address.
+func IsMulticast(addr [16]byte) bool { return addr[0] == 0xff }
+
+// IsLinkLocalUnicast reports whether addr is an IPv6 link-local unicast address.
+func IsLinkLocalUnicast(addr [16]byte) bool { return addr[0] == 0xfe && addr[1]&0xc0 == 0x80 }
+
 // SLAACAddrFromMAC returns the stable IPv6 SLAAC address for prefix and mac.
 // The prefix must be an IPv6 /64. The interface identifier is derived using
 // the modified EUI-64 format from RFC 4862 Appendix A.
