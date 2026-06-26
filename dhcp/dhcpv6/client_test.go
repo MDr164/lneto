@@ -127,6 +127,9 @@ func TestClientSolicitRequest(t *testing.T) {
 	if n == 0 {
 		t.Fatal("Encapsulate (Solicit): wrote 0 bytes")
 	}
+	if !frameHasOption(t, buf[:n], OptReconfAccept) {
+		t.Fatal("Solicit missing Reconfigure Accept option")
+	}
 	if cl.State() != StateSoliciting {
 		t.Fatalf("after Solicit: want StateSoliciting, got %v", cl.State())
 	}
@@ -165,6 +168,87 @@ func TestClientSolicitRequest(t *testing.T) {
 	if addr != assignedAddr {
 		t.Errorf("AssignedAddr: got %v, want %v", addr, assignedAddr)
 	}
+}
+
+func TestClientReconfigureRenew(t *testing.T) {
+	const xid = 0x112233
+	clientMAC := [6]byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	serverDUID := []byte{0, 3, 0, 1, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	assignedAddr := [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	iaid := [4]byte{clientMAC[0], clientMAC[1], clientMAC[2], clientMAC[3]}
+	var cl Client
+	if err := cl.BeginRequest(xid, RequestConfig{ClientHardwareAddr: clientMAC}); err != nil {
+		t.Fatal(err)
+	}
+	var buf [1024]byte
+	if _, err := cl.Encapsulate(buf[:], -1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Demux(buildServerFrame(MsgAdvertise, xid, serverDUID, iaid, assignedAddr), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.Encapsulate(buf[:], -1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Demux(buildServerFrame(MsgReply, xid, serverDUID, iaid, assignedAddr), 0); err != nil {
+		t.Fatal(err)
+	}
+	if cl.State() != StateBound {
+		t.Fatalf("state before reconfigure = %v, want %v", cl.State(), StateBound)
+	}
+	reconf := buildReconfigureFrame(0x445566, serverDUID, cl.duid, MsgRenew)
+	if err := cl.Demux(reconf, 0); err != nil {
+		t.Fatal(err)
+	}
+	if cl.State() != StateRenewing {
+		t.Fatalf("state after reconfigure = %v, want %v", cl.State(), StateRenewing)
+	}
+	msg, ok := cl.LastReconfigure()
+	if !ok || msg != MsgRenew {
+		t.Fatalf("LastReconfigure = %v, %v, want %v, true", msg, ok, MsgRenew)
+	}
+	n, err := cl.Encapsulate(buf[:], -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frm, err := NewFrame(buf[:n])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frm.MsgType() != MsgRenew {
+		t.Fatalf("Encapsulate after Reconfigure type = %v, want %v", frm.MsgType(), MsgRenew)
+	}
+}
+
+func buildReconfigureFrame(xid uint32, serverDUID, clientDUID []byte, msg MsgType) []byte {
+	buf := make([]byte, 128)
+	buf[0] = byte(MsgReconfigure)
+	buf[1] = byte(xid >> 16)
+	buf[2] = byte(xid >> 8)
+	buf[3] = byte(xid)
+	n := OptionsOffset
+	n += writeOpt6(buf[n:], OptServerID, serverDUID...)
+	n += writeOpt6(buf[n:], OptClientID, clientDUID...)
+	n += writeOpt6(buf[n:], OptReconfMsg, byte(msg))
+	return buf[:n]
+}
+
+func frameHasOption(t testing.TB, b []byte, want OptCode) bool {
+	t.Helper()
+	frm, err := NewFrame(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	if err := frm.ForEachOption(func(_ int, code OptCode, _ []byte) error {
+		if code == want {
+			found = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return found
 }
 
 func TestClientParsesNTPServerOption(t *testing.T) {

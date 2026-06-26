@@ -74,7 +74,9 @@ type Client struct {
 	preferredLifetime uint32
 	validLifetime     uint32
 	// IA_PD timers from the server's Advertise/Reply.
-	pdT1, pdT2 uint32
+	pdT1, pdT2     uint32
+	reconfigureMsg MsgType
+	reconfigureOK  bool
 
 	clientMAC [6]byte
 
@@ -148,6 +150,8 @@ func (c *Client) Encapsulate(carrierData []byte, _, offsetToFrame int) (int, err
 		frm.SetTransactionID(c.xid)
 		n, _ := EncodeOption(dst[OptionsOffset+numOpts:], OptClientID, c.duid...)
 		numOpts += n
+		n, _ = EncodeOption(dst[OptionsOffset+numOpts:], OptReconfAccept)
+		numOpts += n
 		n, _ = EncodeOptionIANA(dst[OptionsOffset+numOpts:], c.iaid, 0, 0, nil)
 		numOpts += n
 		n, _ = EncodeOption(dst[OptionsOffset+numOpts:], OptORO, defaultOptRequestList...)
@@ -162,6 +166,8 @@ func (c *Client) Encapsulate(carrierData []byte, _, offsetToFrame int) (int, err
 		n, _ := EncodeOption(dst[OptionsOffset+numOpts:], OptClientID, c.duid...)
 		numOpts += n
 		n, _ = EncodeOption(dst[OptionsOffset+numOpts:], OptServerID, c.serverDUID...)
+		numOpts += n
+		n, _ = EncodeOption(dst[OptionsOffset+numOpts:], OptReconfAccept)
 		numOpts += n
 		auxN, _ := EncodeOptionIAAddr(c.auxbuf[:], c.assignedAddr, 0, 0)
 		n, _ = EncodeOptionIANA(dst[OptionsOffset+numOpts:], c.iaid, 0, 0, c.auxbuf[:auxN])
@@ -218,6 +224,9 @@ func (c *Client) Demux(carrierData []byte, frameOffset int) error {
 	if err != nil {
 		return err
 	}
+	if frm.MsgType() == MsgReconfigure {
+		return c.handleReconfigure(frm)
+	}
 	if frm.TransactionID() != c.xid {
 		return lneto.ErrMismatch
 	}
@@ -243,6 +252,41 @@ func (c *Client) Demux(carrierData []byte, frameOffset int) error {
 		return err
 	}
 	c.state = nextState
+	return nil
+}
+
+func (c *Client) handleReconfigure(frm Frame) error {
+	if !c.state.HasIP() {
+		return lneto.ErrPacketDrop
+	}
+	var clientOK, serverOK bool
+	var reconf MsgType
+	err := frm.ForEachOption(func(_ int, code OptCode, data []byte) error {
+		switch code {
+		case OptClientID:
+			clientOK = internal.BytesEqual(data, c.duid)
+		case OptServerID:
+			serverOK = len(c.serverDUID) == 0 || internal.BytesEqual(data, c.serverDUID)
+		case OptReconfMsg:
+			if len(data) != 1 {
+				return lneto.ErrInvalidLengthField
+			}
+			reconf = MsgType(data[0])
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !clientOK || !serverOK {
+		return lneto.ErrMismatch
+	}
+	c.reconfigureMsg = reconf
+	c.reconfigureOK = true
+	if reconf != MsgRenew {
+		return lneto.ErrUnsupported
+	}
+	c.state = StateRenewing
 	return nil
 }
 
@@ -407,6 +451,9 @@ func (c *Client) isClosed() bool { return c.state == 0 || c.xid == 0 }
 
 // State returns the current client state.
 func (c *Client) State() ClientState { return c.state }
+
+// LastReconfigure returns the last accepted Reconfigure message target.
+func (c *Client) LastReconfigure() (MsgType, bool) { return c.reconfigureMsg, c.reconfigureOK }
 
 // AssignedAddr returns the IPv6 address assigned by the server and whether it is valid.
 func (c *Client) AssignedAddr() ([16]byte, bool) { return c.assignedAddr, c.assignedAddrValid }
