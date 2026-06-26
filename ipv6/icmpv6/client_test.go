@@ -158,6 +158,44 @@ func TestClientPacketTooBig(t *testing.T) {
 	}
 }
 
+func TestClientRouterAdvertisement(t *testing.T) {
+	const frameOffset = 40
+	src := netip.MustParseAddr("fe80::1").As16()
+	dst := netip.MustParseAddr("ff02::1").As16()
+	var buf [frameOffset + sizeRouterAd]byte
+	copy(buf[8:24], src[:])
+	copy(buf[24:40], dst[:])
+	frm, err := NewFrame(buf[frameOffset:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	frm.SetType(TypeRouterAdvertisement)
+	buf[frameOffset+4] = 64
+	binary.BigEndian.PutUint16(buf[frameOffset+6:frameOffset+8], 1800)
+	frm.SetCRC(0)
+	var crc lneto.CRC791
+	crc.WriteEven(buf[8:40])
+	crc.AddUint32(sizeRouterAd)
+	crc.AddUint32(uint32(lneto.IPProtoIPv6ICMP))
+	frm.SetCRC(crc.PayloadSum16(buf[frameOffset:]))
+
+	var client Client
+	if err := client.Demux(buf[:], frameOffset); err != nil {
+		t.Fatal(err)
+	}
+	report, ok := client.LastRouterAdvertisement()
+	if !ok {
+		t.Fatal("LastRouterAdvertisement ok=false, want true")
+	}
+	if report.Source != src || report.CurrentHopLimit != 64 || report.RouterLifetime != 1800 {
+		t.Fatalf("LastRouterAdvertisement = %+v", report)
+	}
+	client.Reset()
+	if _, ok := client.LastRouterAdvertisement(); ok {
+		t.Fatal("LastRouterAdvertisement after Reset ok=true, want false")
+	}
+}
+
 func makePrefixInformationOption(prefix netip.Prefix, valid, preferred uint32, onLink, autonomous bool) []byte {
 	var buf [32]byte
 	buf[0] = OptPrefixInformation
