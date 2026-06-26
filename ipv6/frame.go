@@ -184,9 +184,15 @@ func (i6frm Frame) DestinationAddr() *[16]byte {
 }
 
 func (i6frm Frame) CRCWritePseudo(crc *lneto.CRC791) {
+	i6frm.CRCWritePseudoNext(crc, i6frm.NextHeader(), uint32(i6frm.PayloadLength()))
+}
+
+// CRCWritePseudoNext writes the IPv6 pseudo-header using next as the upper-layer
+// protocol and length as the upper-layer packet length.
+func (i6frm Frame) CRCWritePseudoNext(crc *lneto.CRC791, next lneto.IPProto, length uint32) {
 	crc.WriteEven(i6frm.sourceAndDestinationAddr())
-	crc.AddUint32(uint32(i6frm.PayloadLength()))
-	crc.AddUint32(uint32(i6frm.NextHeader()))
+	crc.AddUint32(length)
+	crc.AddUint32(uint32(next))
 }
 
 // ClearHeader zeros out the header contents.

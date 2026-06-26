@@ -105,17 +105,35 @@ func (si6 *stackip6) demux6(carrierData []byte, offset int) error {
 		return err
 	}
 
-	proto := ifrm.NextHeader()
+	hasFragment := false
+	proto, payloadOffset, err := ifrm.ForEachExtensionHeader(func(hdr ipv6.ExtensionHeader) error {
+		if hdr.Protocol == lneto.IPProtoIPv6Frag {
+			hasFragment = true
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if hasFragment {
+		return lneto.ErrUnsupported
+	}
+	if proto == lneto.IPProtoIPv6NoNxt {
+		return lneto.ErrPacketDrop
+	}
 	node := si6.handlers.nodeByProto(uint16(proto))
 	if node == nil {
 		si6.handlers.info("ip6:demux.drop", slog.String("proto", proto.String()))
 		return lneto.ErrPacketDrop
 	}
-	payload := ifrm.Payload()
+	const headerlen = 40
+	plen := ifrm.PayloadLength()
+	frameEnd := headerlen + int(plen)
+	payload := carrierData[offset+payloadOffset : offset+frameEnd]
 	var crc lneto.CRC791
 	switch proto {
 	case lneto.IPProtoTCP:
-		ifrm.CRCWritePseudo(&crc)
+		ifrm.CRCWritePseudoNext(&crc, proto, uint32(len(payload)))
 		if crc.PayloadSum16(payload) != 0 {
 			si6.handlers.error("ip6:demux.tcpcrc")
 			return lneto.ErrBadCRC
@@ -130,16 +148,14 @@ func (si6 *stackip6) demux6(carrierData []byte, offset int) error {
 			si6.handlers.error("ip6:demux.udpvalidatesize")
 			return err
 		}
-		ifrm.CRCWritePseudo(&crc)
+		ifrm.CRCWritePseudoNext(&crc, proto, uint32(len(payload)))
 		if crc.PayloadSum16(payload) != 0 {
 			si6.handlers.error("ip6:demux.udpcrc")
 			return lneto.ErrBadCRC
 		}
 	}
-	const headerlen = 40
-	plen := ifrm.PayloadLength()
 	si6.handlers.info("ip6Demux", slog.String("ipproto", proto.String()), slog.Int("plen", int(plen)))
-	err = node.callbacks.Demux(carrierData[offset:offset+headerlen+int(plen)], headerlen)
+	err = node.callbacks.Demux(carrierData[offset:offset+frameEnd], payloadOffset)
 	if si6.handlers.tryHandleError(node, err) {
 		si6.handlers.info("ip6close", slog.String("proto", proto.String()))
 		err = nil

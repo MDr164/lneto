@@ -10,6 +10,7 @@ import (
 	"github.com/soypat/lneto/dhcp/dhcpv6"
 	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/internet"
+	"github.com/soypat/lneto/ipv6"
 	"github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/udp"
 )
@@ -342,6 +343,81 @@ func TestStack6UDP_DataExchange(t *testing.T) {
 	if !bytes.Equal(rbuf[:n], want) {
 		t.Errorf("got %q, want %q", rbuf[:n], want)
 	}
+}
+
+func TestStack6UDP_DestinationOptionsDemux(t *testing.T) {
+	const (
+		rngseed = 101
+		portA   = 5101
+		portB   = 5102
+		nports  = 2
+	)
+	s1, s2 := newStack6Pair(t, rngseed, nports, 0)
+	buf := make([]byte, maxFrame6)
+
+	connA := newUDPConn6(t)
+	connB := newUDPConn6(t)
+	if err := s1.DialUDP6(connA, portA, s2.Addr6(), portB); err != nil {
+		t.Fatal("DialUDP6 A:", err)
+	}
+	if err := s2.DialUDP6(connB, portB, s1.Addr6(), portA); err != nil {
+		t.Fatal("DialUDP6 B:", err)
+	}
+
+	want := []byte("hello with destopts")
+	if _, err := connA.Write(want); err != nil {
+		t.Fatal("Write:", err)
+	}
+	n, err := s1.EgressIPv6(buf)
+	if err != nil {
+		t.Fatal("EgressIPv6:", err)
+	}
+	if n == 0 {
+		t.Fatal("expected packet from A to B")
+	}
+	n = insertIPv6DestinationOptions(t, buf, n)
+	if err := s2.IngressIPv6(buf[:n]); err != nil {
+		t.Fatal("IngressIPv6 with destination options:", err)
+	}
+
+	var rbuf [256]byte
+	rn, err := connB.Read(rbuf[:])
+	if err != nil {
+		t.Fatal("Read:", err)
+	}
+	if !bytes.Equal(rbuf[:rn], want) {
+		t.Errorf("got %q, want %q", rbuf[:rn], want)
+	}
+}
+
+func insertIPv6DestinationOptions(t testing.TB, buf []byte, n int) int {
+	t.Helper()
+	const (
+		ipHeaderLen  = 40
+		extHeaderLen = 8
+	)
+	if len(buf) < n+extHeaderLen {
+		t.Fatal("short test buffer")
+	}
+	ifrm, err := ipv6.NewFrame(buf[:n+extHeaderLen])
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPayloadLen := ifrm.PayloadLength()
+	copy(buf[ipHeaderLen+extHeaderLen:n+extHeaderLen], buf[ipHeaderLen:n])
+	ifrm.SetNextHeader(lneto.IPProtoIPv6Opts)
+	ifrm.SetPayloadLength(oldPayloadLen + extHeaderLen)
+	buf[ipHeaderLen] = byte(lneto.IPProtoUDP)
+	buf[ipHeaderLen+1] = 0
+	ufrm, err := udp.NewFrame(buf[ipHeaderLen+extHeaderLen:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ufrm.SetCRC(0)
+	var crc lneto.CRC791
+	ifrm.CRCWritePseudoNext(&crc, lneto.IPProtoUDP, uint32(ufrm.Length()))
+	ufrm.SetCRC(lneto.NeverZeroSum(crc.PayloadSum16(ufrm.RawData()[:ufrm.Length()])))
+	return n + extHeaderLen
 }
 
 // TestStack6UDP_BidirectionalExchange verifies that both sides can send and receive.

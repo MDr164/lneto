@@ -114,7 +114,7 @@ ok      github.com/soypat/lneto/x/xnet  2.926s
 | IPv6 Neighbor Discovery | RFC 4861 | 🟡 | `ipv6/icmpv6`, `x/xnet` | — | Neighbor solicitation/advertisement cache; router discovery incomplete |
 | IPv6 SLAAC | RFC 4862 | ❌ | — | — | Not implemented |
 | IPv6 Default Address Selection | RFC 6724 | ❌ | — | — | Not implemented |
-| IPv6 Extension Header Processing | RFC 8200, RFC 7045, RFC 7112 | 🟡 | `ipv6` | — | Extension header chain parsing helpers; not integrated into stack demux |
+| IPv6 Extension Header Processing | RFC 8200, RFC 7045, RFC 7112 | 🟡 | `ipv6`, `internet` | — | Extension header chain parsing and inbound demux; fragment reassembly not implemented |
 | IPv6 Path MTU Discovery | RFC 8201 | ❌ | — | — | Not implemented |
 | IPv6 Router Advertisement DNS Options | RFC 8106 | 🟡 | `ipv6/icmpv6` | — | RDNSS and DNSSL option parsing; no router/SLAAC state integration |
 | IPv6 Privacy Extensions | RFC 8981 | ❌ | — | — | Not implemented |
