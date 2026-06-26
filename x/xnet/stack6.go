@@ -9,6 +9,7 @@ import (
 	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/internal"
 	"github.com/soypat/lneto/internet"
+	"github.com/soypat/lneto/ipv6"
 	"github.com/soypat/lneto/ipv6/icmpv6"
 	"github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/udp"
@@ -32,6 +33,7 @@ type Stack6 interface {
 	RegisterListenerTCP6(listener *tcp.Listener) error
 	RegisterListenerUDP6(pktconn *udp.PacketConn) error
 	RegisterUDPNode6(port *internet.StackUDPPort, node lneto.StackNode, raddr [16]byte, rport uint16) error
+	ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok bool, err error)
 	StartDHCPv6Request() error
 	ResultDHCPv6() (*DHCPResultsV6, error)
 	IngressIPv6(ipframe []byte) error
@@ -167,6 +169,30 @@ func (s *stack6) RegisterListenerUDP6(pktconn *udp.PacketConn) error {
 func (s *stack6) RegisterUDPNode6(port *internet.StackUDPPort, node lneto.StackNode, raddr [16]byte, rport uint16) error {
 	port.SetStackNode(node, raddr[:], rport)
 	return s.udps6.RegisterMACFiltered(port, nil)
+}
+
+// ApplyRouterAdvertisement6 applies IPv6 SLAAC state from Router Advertisement
+// options and returns the address configured from the first usable autonomous
+// /64 Prefix Information option.
+func (s *stack6) ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok bool, err error) {
+	err = icmpv6.ForEachOption(options, func(option []byte) error {
+		if ok || option[0] != icmpv6.OptPrefixInformation {
+			return nil
+		}
+		info, parsed := icmpv6.ParsePrefixInformationOption(option)
+		if !parsed {
+			return lneto.ErrInvalidField
+		}
+		if !info.Autonomous || info.ValidLifetime == 0 {
+			return nil
+		}
+		addr, ok = ipv6.SLAACAddrFromMAC(info.Prefix, s.hwaddr)
+		if !ok {
+			return nil
+		}
+		return s.SetAddr6(addr.As16())
+	})
+	return addr, ok, err
 }
 
 func (s *stack6) StartDHCPv6Request() error {

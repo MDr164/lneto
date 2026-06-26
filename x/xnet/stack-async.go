@@ -779,6 +779,18 @@ func (s *StackAsync) ResultDHCPv6() (*DHCPResultsV6, error) {
 	return s.stack6.ResultDHCPv6()
 }
 
+// ApplyRouterAdvertisement6 applies IPv6 SLAAC state from Router Advertisement
+// options and returns the address configured from the first usable autonomous
+// /64 Prefix Information option.
+func (s *StackAsync) ApplyRouterAdvertisement6(options []byte) (addr netip.Addr, ok bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ipv6enabled {
+		return netip.Addr{}, false, lneto.ErrUnsupported
+	}
+	return s.stack6.ApplyRouterAdvertisement6(options)
+}
+
 type Statistics struct {
 	// Total amount of bytes sent over encapsulate.
 	TotalSent uint64

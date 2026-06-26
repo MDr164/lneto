@@ -11,6 +11,7 @@ import (
 	"github.com/soypat/lneto/dns"
 	"github.com/soypat/lneto/internet"
 	"github.com/soypat/lneto/ipv6"
+	"github.com/soypat/lneto/ipv6/icmpv6"
 	"github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/udp"
 )
@@ -301,6 +302,46 @@ func TestStack6Reset_ICMPConfigured(t *testing.T) {
 	if err := s.EnableICMP6(false); err != nil {
 		t.Fatal("EnableICMP6(false):", err)
 	}
+}
+
+func TestStack6ApplyRouterAdvertisementSLAAC(t *testing.T) {
+	cfg := StackConfig{
+		Hostname:        "slaac-test",
+		RandSeed:        1,
+		HardwareAddress: [6]byte{0x00, 0x25, 0x96, 0x12, 0x34, 0x56},
+		ICMPQueueLimit:  1,
+	}
+	s := DefaultStack6()
+	if err := s.Reset6(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	opt := makeRouterAdvertisementPrefixOption(netip.MustParsePrefix("2001:db8:1:2::/64"), 3600, 1800, true)
+	addr, ok, err := s.ApplyRouterAdvertisement6(opt[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := netip.MustParseAddr("2001:db8:1:2:225:96ff:fe12:3456")
+	if !ok || addr != want {
+		t.Fatalf("ApplyRouterAdvertisement6 = %s, %v, want %s, true", addr, ok, want)
+	}
+	if got := netip.AddrFrom16(s.Addr6()); got != want {
+		t.Fatalf("Addr6 = %s, want %s", got, want)
+	}
+}
+
+func makeRouterAdvertisementPrefixOption(prefix netip.Prefix, valid, preferred uint32, autonomous bool) [32]byte {
+	var buf [32]byte
+	buf[0] = icmpv6.OptPrefixInformation
+	buf[1] = 4
+	buf[2] = byte(prefix.Bits())
+	if autonomous {
+		buf[3] = 0x40
+	}
+	binary.BigEndian.PutUint32(buf[4:8], valid)
+	binary.BigEndian.PutUint32(buf[8:12], preferred)
+	addr := prefix.Addr().As16()
+	copy(buf[16:], addr[:])
+	return buf
 }
 
 // TestStack6UDP_DataExchange sends a datagram from stack A to stack B and reads it back.
