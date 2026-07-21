@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+#
+# lneto pre-commit hook.
+#
+# Surfaces ungated heap allocations in the staged Go code and enforces the
+# allocation-regression tests (see scripts/check-allocs.sh). lneto runs on
+# bare-metal targets, so slices grown directly from untrusted network input are
+# an OOM vector and must be bounded/configurable.
+#
+# Enable for this clone with:
+#     git config core.hooksPath .githooks
+#
+# Skip once with `git commit --no-verify` if you must.
+
+repo=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+exec "$repo/scripts/check-allocs.sh"
