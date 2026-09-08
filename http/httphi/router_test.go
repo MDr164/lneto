@@ -150,9 +150,8 @@ func (r *rwconn) ViewWritten() string {
 var _ Mux = (*MuxSlice)(nil)
 
 func configSynchronousRouter(t *testing.T, router *Router, bufferSize int, mux Mux) {
-	err := router.Configure(RouterConfig{
+	err := router.Configure(mux, RouterConfig{
 		FixedNumGoroutines:          -1,
-		Mux:                         mux,
 		RequestHeaderBufferSize:     bufferSize,
 		RequestNumHeaderKVCap:       16,
 		ResponseHeaderMinBufferSize: bufferSize,
@@ -196,8 +195,10 @@ func TestRouterRequestVisibleToHandler(t *testing.T) {
 		router Router
 	)
 	var gotMethod, gotURI, gotHost string
+	var gotMethodEnum Method
 	sm.Handle("GET /index.html", func(ex *Exchange) {
-		gotMethod = string(ex.RequestMethod())
+		gotMethod = string(ex.RequestMethodBytes())
+		gotMethodEnum = ex.RequestMethod()
 		gotURI = string(ex.RequestTarget())
 		gotHost = string(ex.RequestHeader("Host"))
 		ex.WriteHeader(200)
@@ -212,6 +213,9 @@ func TestRouterRequestVisibleToHandler(t *testing.T) {
 
 	if gotMethod != "GET" {
 		t.Errorf("want method %q, got %q", "GET", gotMethod)
+	}
+	if gotMethodEnum != MethGet {
+		t.Errorf("want method enum %q, got %q", MethGet, gotMethodEnum)
 	}
 	if gotURI != "/index.html" {
 		t.Errorf("want URI %q, got %q", "/index.html", gotURI)
@@ -242,7 +246,9 @@ func TestRouterMux(t *testing.T) {
 				sm     MuxSlice
 				router Router
 			)
-			sm.Handle("GET /", staticPage(t, "root"))
+			// "/{$}" is the root alone: a bare "/" is a catch-all and would serve
+			// "root" for /page and /nowhere as well, see [SetPathValues].
+			sm.Handle("GET /{$}", staticPage(t, "root"))
 			sm.Handle("GET /page", staticPage(t, "page"))
 			sm.Handle("/any", staticPage(t, "any")) // No method: matches any.
 			configSynchronousRouter(t, &router, bufferSize, &sm)
@@ -381,10 +387,8 @@ func TestRouterHandleAfterTeardown(t *testing.T) {
 		router Router
 	)
 	sm.Handle("GET /", staticPage(t, "ok"))
-	err := router.Configure(RouterConfig{
+	err := router.Configure(&sm, RouterConfig{
 		FixedNumGoroutines:          2,
-		MaxAwaitingConns:            4,
-		Mux:                         &sm,
 		RequestHeaderBufferSize:     512,
 		RequestNumHeaderKVCap:       16,
 		ResponseHeaderMinBufferSize: 512,
@@ -416,8 +420,6 @@ func TestRouterTeardownReleasesQueuedConns(t *testing.T) {
 	sm.Handle("GET /", staticPage(t, "ok"))
 	cfg := RouterConfig{
 		FixedNumGoroutines:          numGoro,
-		MaxAwaitingConns:            4,
-		Mux:                         &sm,
 		RequestHeaderBufferSize:     512,
 		RequestNumHeaderKVCap:       16,
 		ResponseHeaderMinBufferSize: 512,
@@ -431,7 +433,7 @@ func TestRouterTeardownReleasesQueuedConns(t *testing.T) {
 		// generation drops its connections, but it must not outlive it.
 		var err error
 		for range 100 {
-			if err = router.Configure(cfg); err == nil {
+			if err = router.Configure(&sm, cfg); err == nil {
 				break
 			}
 			time.Sleep(time.Millisecond)
@@ -463,13 +465,11 @@ func TestRouterConfigureDuringWorkerHandle(t *testing.T) {
 	sm.Handle("GET /", staticPage(t, "ok"))
 	cfg := RouterConfig{
 		FixedNumGoroutines:          2,
-		MaxAwaitingConns:            4,
-		Mux:                         &sm,
 		RequestHeaderBufferSize:     512,
 		RequestNumHeaderKVCap:       16,
 		ResponseHeaderMinBufferSize: 512,
 	}
-	if err := router.Configure(cfg); err != nil {
+	if err := router.Configure(&sm, cfg); err != nil {
 		t.Fatal(err)
 	}
 	defer router.Shutdown()
@@ -491,7 +491,7 @@ func TestRouterConfigureDuringWorkerHandle(t *testing.T) {
 		for range 20 {
 			// errBusyExchanges is legitimate backpressure: the previous
 			// generation was still serving when the buffers were needed.
-			if err := router.Configure(cfg); err != nil && err != errBusyExchanges {
+			if err := router.Configure(&sm, cfg); err != nil && err != errBusyExchanges {
 				t.Error(err)
 				return
 			}

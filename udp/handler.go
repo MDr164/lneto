@@ -1,7 +1,6 @@
 package udp
 
 import (
-	"fmt"
 	"net"
 
 	"github.com/soypat/lneto"
@@ -76,7 +75,12 @@ func (h *Handler) Recv(buf []byte) error {
 		return lneto.ErrMismatch
 	}
 	// Header size validation.
-	// No CRC validation at this level.
+	// No CRC validation at this level: the UDP checksum covers a pseudo-header of
+	// addresses this layer cannot see, so it belongs to whoever owns them. The
+	// IPv4 and IPv6 stacks in package internet reject a bad checksum before demux
+	// and compute it on transmit, including the RFC 768 rule that a zero result is
+	// sent as 0xFFFF. A Handler driven directly, without those stacks, receives no
+	// checksum protection.
 	ul := ufrm.Length()
 	if ul < sizeHeader {
 		return lneto.ErrInvalidLengthField
@@ -117,7 +121,7 @@ func (h *Handler) Send(buf []byte) (int, error) {
 	dgram := internal.SliceDequeueFront(&h.txDgrams)
 	n, err := h.txRing.Read(buf[8 : 8+dgram.length])
 	if err != nil || n != int(dgram.length) {
-		panic(fmt.Sprintf("udp send handler failure %d %s", n, err))
+		panic("udp send handler failure")
 	}
 	ufrm.SetSourcePort(h.lport)
 	ufrm.SetDestinationPort(h.rport)
@@ -152,13 +156,13 @@ func (h *Handler) ReadNext(b []byte) (int, error) {
 	dgram := internal.SliceDequeueFront(&h.rxDgrams)
 	n, err := h.rxRing.Read(b[:min(len(b), int(dgram.length))])
 	if err != nil {
-		panic(fmt.Sprintf("udp read handler failure %d %s", n, err))
+		panic("udp readnext rx ring failure")
 	}
 	discard := int(dgram.length) - len(b)
 	if discard > 0 {
 		err = h.rxRing.ReadDiscard(discard)
 		if err != nil {
-			panic(fmt.Sprintf("udp readdiscard handler failure %d %s", n, err))
+			panic("udp readnext discard failure")
 		}
 	}
 	return n, nil

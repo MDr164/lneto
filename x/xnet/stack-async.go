@@ -53,6 +53,10 @@ type StackAsync struct {
 	lookup  dns.Message
 	dnssv   netip.Addr
 
+	// ephPort drives sequential ephemeral-port allocation (see
+	// [StackAsync.ephemeralPort]); zero means not yet seeded.
+	ephPort uint32
+
 	ntpUDP internet.StackUDPPort
 	ntp    ntp.Client
 
@@ -125,8 +129,8 @@ func (s *StackAsync) IngressEthernet(ethernetFrame []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stats.TotalReceived += uint64(len(ethernetFrame))
-	err := s.link.Demux(ethernetFrame, 0)
 	debugPacket("IN ", ethernetFrame)
+	err := s.link.Demux(ethernetFrame, 0)
 	if err == nil {
 		s.arpt.learnFromIngressEthernet(ethernetFrame)
 	}
@@ -144,6 +148,20 @@ func (s *StackAsync) EgressEthernet(dstEthernetFrame []byte) (int, error) {
 		debugPacket("OUT", dstEthernetFrame[:n])
 	}
 	return n, err
+}
+
+// NextDeadline returns the monotonic-nanosecond instant at which some node in
+// the stack must next be given a chance to transmit, or 0 when nothing in the
+// stack is waiting on time. It is the earliest deadline reported by the
+// registered nodes; see [lneto.StackNode].
+//
+// lneto drives no egress of its own, so this is how a caller learns when to call
+// [StackAsync.EgressEthernet] again rather than polling. A retransmission is
+// otherwise only sent when egress next happens to run.
+func (s *StackAsync) NextDeadline() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.link.NextDeadline()
 }
 
 // IngressIP processes an incoming IP frame through the stack and omits ethernet header processing.
@@ -350,6 +368,23 @@ func (s *StackAsync) Prand32() (randval uint32) {
 	randval = s.prand32()
 	s.mu.Unlock()
 	return randval
+}
+
+// ephemeralPort returns the next port of the IANA dynamic range (49152-65535,
+// RFC 6335 §6), allocated sequentially from a random per-stack start so a port is
+// revisited only after the full 16384-port cycle. Random selection instead reuses
+// a recent port at birthday-paradox rates, and a reused 4-tuple can collide with
+// state the previous conversation left behind (a TIME-WAIT, a NAT flow entry)
+// which swallows the new SYN.
+func (s *StackAsync) ephemeralPort() uint16 {
+	s.mu.Lock()
+	if s.ephPort == 0 {
+		s.ephPort = s.prand32()%16384 | 1
+	}
+	port := 49152 + s.ephPort%16384
+	s.ephPort++
+	s.mu.Unlock()
+	return uint16(port)
 }
 
 func (s *StackAsync) prand32() uint32 {
@@ -630,6 +665,9 @@ func (s *StackAsync) StartLookupIPType(host string, qtype dns.Type) error {
 			s.ednsopt,
 		},
 		EnableRecursion: true,
+		// Leave headroom above the address buffer for CNAME records, which
+		// occupy answer slots before the addresses they alias.
+		MaxResponseAnswers: uint16(len(s.addrbufnip)) + 8,
 	})
 	if err != nil {
 		return err

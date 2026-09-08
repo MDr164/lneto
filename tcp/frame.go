@@ -2,14 +2,19 @@ package tcp
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 
 	"github.com/soypat/lneto"
+	"github.com/soypat/lneto/internal"
 )
 
 const (
 	sizeHeaderTCP = 20
+	// maxTCPOptionBytes is the largest TCP option area: the data offset is four
+	// bits of 32-bit words, so a header spans at most 60 octets.
+	maxTCPOptionBytes = 40
+	// sizeOptionMSS is the length of the Maximum Segment Size option.
+	sizeOptionMSS = 4
 )
 
 // NewFrame returns a new [Frame] with data set to buf.
@@ -170,7 +175,12 @@ func (tfrm Frame) String() string {
 	src := tfrm.SourcePort()
 	dst := tfrm.DestinationPort()
 	seg := tfrm.Segment(len(tfrm.Payload()))
-	return fmt.Sprintf("TCP :%d -> :%d %s", src, dst, seg.String())
+	b := make([]byte, 0, 64)
+	b = append(b, "TCP "...)
+	b = internal.AppendStrDecimal(b, " src=", int64(src))
+	b = internal.AppendStrDecimal(b, " dst=", int64(dst))
+	b = append(b, ' ')
+	return string(seg.AppendString(b))
 }
 
 //

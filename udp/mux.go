@@ -1,7 +1,6 @@
 package udp
 
 import (
-	"fmt"
 	"math"
 	"net"
 	"net/netip"
@@ -75,6 +74,8 @@ type MuxConfig struct {
 
 // muxHandler
 type muxHandler struct {
+	lneto.NoDeadline // no time-driven work
+
 	connid uint64
 	// filterLPorts stores rx port ranges over which Handler can receive data.
 	// If not set will not filter UDP data.
@@ -175,7 +176,7 @@ func (mh *muxHandler) Demux(carrierData []byte, frameOffset int) error {
 	}
 
 	// Header size validation.
-	// No CRC validation at this level.
+	// No CRC validation at this level; see [Handler.Recv] for why.
 	ul := ufrm.Length()
 	if ul < sizeHeader {
 		return lneto.ErrInvalidLengthField
@@ -226,7 +227,7 @@ func (mh *muxHandler) Encapsulate(carrierData []byte, ipOffset, frameOffset int)
 
 	n, err := mh.txRing.Read(buf[8 : 8+dgram.length])
 	if err != nil || n != int(dgram.length) {
-		panic(fmt.Sprintf("udp send handler failure %d %s", n, err))
+		panic("udp muxh encaps fail txring read")
 	}
 	ufrm.SetSourcePort(dgram.lport)
 	ufrm.SetDestinationPort(dgram.rport)

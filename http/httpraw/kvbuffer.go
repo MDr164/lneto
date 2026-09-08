@@ -23,6 +23,11 @@ func (kvb *kvBuffer) free() int { return cap(kvb.buf) - len(kvb.buf) }
 // Stored pairs alias it, so writing to it mangles them.
 func (kvb *kvBuffer) BufferRaw() []byte { return kvb.buf }
 
+// BufferUsed returns the raw memory used, which is what a caller appending from
+// several sources checks to know whether a separator is needed. Counts buffered
+// bytes and not parsed pairs, so it is set before a Parse and unchanged by one.
+func (kvb *kvBuffer) BufferUsed() int { return len(kvb.buf) }
+
 // EnableBufferGrowth allows the buffer to grow past the memory [kvBuffer.Reset]
 // was handed. The setting outlives Reset; with growth off callers get [ErrBufferExhausted].
 func (kvb *kvBuffer) EnableBufferGrowth(enableGrowth bool) {
@@ -285,35 +290,17 @@ func (kvb *kvBuffer) getIdx(key string) int {
 
 func (kvb *kvBuffer) getFoldIdx(key string) int {
 	for i, pair := range kvb.kvs {
-		if pair.isValid() && asciiEqualFold(key, b2s(kvb.AtKey(i))) {
+		if pair.isValid() && EqualFoldASCII(key, b2s(kvb.AtKey(i))) {
 			return i
 		}
 	}
 	return -1
 }
 
-// asciiEqualFold reports whether a and b are equal under ASCII case folding.
+// EqualFoldASCII reports whether a and b are equal under ASCII case folding.
 // Unlike strings.EqualFold it does not fold non-ASCII runes, so no multi-byte
 // rune such as U+212A KELVIN SIGN can alias a header key.
-func asciiEqualFold(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	const asciiCapDiff = 'a' - 'A'
-	for i := 0; i < len(a); i++ {
-		ca, cb := a[i], b[i]
-		if ca >= 'A' && ca <= 'Z' {
-			ca += asciiCapDiff
-		}
-		if cb >= 'A' && cb <= 'Z' {
-			cb += asciiCapDiff
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
-}
+func EqualFoldASCII(a, b string) bool { return internal.EqualFoldASCII(a, b) }
 
 // reserve ensures need free bytes are available in the buffer, growing it when
 // permitted. It accounts for the byte-0 reservation on an empty buffer (see
@@ -457,13 +444,19 @@ type pairKV struct {
 	value view // value start >0 means value is present.
 }
 
+// SizeKV is the heap cost of a single key/value field slot, as reserved by the
+// numHeaderCapacity argument to [HeaderV1.Reset] and by [Form.Reset]. Callers
+// budgeting a fixed memory pool up front, such as a Router sizing its
+// exchanges, multiply it by the pair capacity to account the field table.
+const SizeKV = int(unsafe.Sizeof(pairKV{}))
+
 // isValid is for stores parsed in place, where offset 0 is the first key so
 // only length can signal presence. Empty keys are valid: see valueless cookies.
 func (pair pairKV) isValid() bool {
 	return pair.key.len > 0 || pair.value.len > 0
 }
 
-// isValidHeader is for the append-built [Header] store, where mustAppendSlice
+// isValidHeader is for the append-built [HeaderV1] store, where mustAppendSlice
 // burns byte 0 so a zero offset means absent. Drops offset-0 pairs otherwise.
 func (pair pairKV) isValidHeader() bool { return pair.key.start > 0 }
 
